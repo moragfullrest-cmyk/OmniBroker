@@ -75,7 +75,7 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
                 MessageType = t.Value,
                 Handlers =
                 [
-                    Broker.BrokerExtensions.WrapActionDelegate<bool>((Delegate )typeof(RabbitMQExtension).GetMethod(nameof(CreateCorrelationDelegate)
+                    OmniBroker.BrokerExtensions.WrapActionDelegate<bool>((Delegate )typeof(RabbitMQExtension).GetMethod(nameof(CreateCorrelationDelegate)
                     , System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).MakeGenericMethod(t.Value)
                     .Invoke(null, null))
                 ]
@@ -91,7 +91,7 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
                 MessageType = t.Key,
                 Handlers =
                 [
-                    Broker.BrokerExtensions.WrapActionDelegate<bool>((Delegate )typeof(RabbitMQExtension).GetMethod(nameof(CreateReplyDelegate)
+                    OmniBroker.BrokerExtensions.WrapActionDelegate<bool>((Delegate )typeof(RabbitMQExtension).GetMethod(nameof(CreateReplyDelegate)
                     , System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).MakeGenericMethod(returnType)
                     .Invoke(null, new object[]{t.Value }))
                 ]
@@ -133,7 +133,7 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
     {
         return async (IServiceProvider provider, IMessage message, MessageContext context) =>
         {
-            TOutput result = await Broker.BrokerExtensions.WrapActionDelegate<TOutput>(action)(provider, message, context);
+            TOutput result = await OmniBroker.BrokerExtensions.WrapActionDelegate<TOutput>(action)(provider, message, context);
             var producer = (RabbitMQBasicProducer<TOutput>)provider.GetRequiredKeyedService<IProducer<TOutput>>(context.CurrentBrokerId);
             producer.CorrelationId = message.CorrelationId;
             var builder = provider.GetRequiredKeyedService<BrokerOptionsBuilder>(context.CurrentBrokerId);
