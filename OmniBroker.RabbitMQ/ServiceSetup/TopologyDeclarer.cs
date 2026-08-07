@@ -1,3 +1,4 @@
+using System.Reflection;
 using OmniBroker.Interfaces;
 using RabbitMQ.Client;
 
@@ -28,7 +29,7 @@ internal class TopologyDeclarer
         foreach (Type type in builder.Consumables.Keys)
         {
             await channel.QueueDeclareAsync(nameResolver.ResolveInboundName(type), false, false, false, null);
-            string[] routingKeys = ((string[]?)(type.GetProperty(nameof(IMessage.AcceptableTags))?.GetValue(null))) ?? [string.Empty];
+            string[] routingKeys = ((string[]?)(type.GetProperty(nameof(IMessage.AcceptableTags), BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)?.GetValue(null))) ?? [string.Empty];
             foreach (string routingKey in routingKeys)
                 await channel.QueueBindAsync(nameResolver.ResolveInboundName(type), nameResolver.ResolveOutboundName(type), routingKey);
         }

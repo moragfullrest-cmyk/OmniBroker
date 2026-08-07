@@ -1,3 +1,4 @@
+using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ.ServiceSetup;
 using Microsoft.Extensions.Logging;
@@ -13,10 +14,7 @@ internal class RabbitMQBasicProducer<TMessage>(
     )
     : IProducer<TMessage> where TMessage : IMessage
 {
-    internal string ReplyQueue { get; set; }
-    internal string ExchangeName = nameResolver.ResolveOutboundName(typeof(TMessage));
-    internal string? CorrelationId;
-    public async Task<bool> Publish(TMessage message)
+    public async Task<bool> Publish(TMessage message, PublishOptions? options = null, CancellationToken cancellationToken = default)
     {
         IChannel channel = channelPool.Get();
         try
@@ -24,13 +22,21 @@ internal class RabbitMQBasicProducer<TMessage>(
             if (channel.IsClosed)
                 return false;
 
+            string exchange = options?.Destination ?? nameResolver.ResolveOutboundName(typeof(TMessage));
+
             var props = new BasicProperties
             {
-                CorrelationId = CorrelationId ?? Guid.NewGuid().ToString(),
-                ReplyTo = ReplyQueue
+                CorrelationId = options?.CorrelationId ?? Guid.NewGuid().ToString(),
+                ReplyTo = options?.ReplyTo
             };
 
-            await channel.BasicPublishAsync(exchange: ExchangeName, routingKey: string.IsNullOrEmpty(message.Tag) ? "" : message.Tag, mandatory: true, body: message.Body, basicProperties: props);
+            await channel.BasicPublishAsync(
+                exchange: exchange,
+                routingKey: string.IsNullOrEmpty(message.Tag) ? "" : message.Tag,
+                mandatory: true,
+                body: message.Body,
+                basicProperties: props,
+                cancellationToken: cancellationToken);
 
             return true;
         }

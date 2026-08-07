@@ -11,57 +11,61 @@ internal class RabbitMQBasicRpcCaller<TInputMessage, TOutputMessage> : IRpcCalle
     where TOutputMessage : IMessage
 {
     private readonly IProducer<TInputMessage> _producer;
-    private readonly ConcurrentDictionary<string, PendingOperation> _awaitedOperations;
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<IMessage>> _awaitedOperations;
     private readonly BrokerOptionsBuilder _builder;
     private readonly INameResolver _nameResolver;
+    private readonly RabbitMQSettings _settings;
 
     public RabbitMQBasicRpcCaller(IServiceProvider _serviceProvider, BrokerId id)
     {
         _builder = _serviceProvider.GetServices<BrokerOptionsBuilder>().First(_ => _.BrokerId == id);
         _producer = _serviceProvider.GetRequiredKeyedService<IProducer<TInputMessage>>(id);
-        _awaitedOperations = _serviceProvider.GetRequiredKeyedService<ConcurrentDictionary<string, PendingOperation>>(id);
+        _awaitedOperations = _serviceProvider.GetRequiredKeyedService<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>>(id);
         _nameResolver = _serviceProvider.GetRequiredKeyedService<INameResolver>(id);
+        _settings = _serviceProvider.GetRequiredKeyedService<RabbitMQSettings>(id);
     }
 
-    public async Task<TOutputMessage> Call(TInputMessage input)
+    public async Task<TOutputMessage> Call(TInputMessage input, CancellationToken cancellationToken = default)
     {
         input.Tag = typeof(TInputMessage).Name;
-        var localProducer = (RabbitMQBasicProducer<TInputMessage>)_producer;
-        localProducer.ExchangeName = _nameResolver.ResolveOutboundName(typeof(TInputMessage));
         var correlationId = Guid.NewGuid().ToString();
-        localProducer.CorrelationId = correlationId;
-        localProducer.ReplyQueue = ((RabbitMQExtension)_builder.Extension).ReplyQueueName;
 
-        await _producer.Publish(input);
-        _awaitedOperations.AddOrUpdate(key: correlationId, addValue: new PendingOperation { CallTime = DateTime.Now, Timedout = false, Result = null }, updateValueFactory: (s, b) => b);
-
-        using (var timeoutCancellationTokenSource = new CancellationTokenSource())
+        var tcs = new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_awaitedOperations.TryAdd(correlationId, tcs))
         {
-            var task = Task.Run(() =>
+            throw new InvalidOperationException($"Pending operation for correlation id '{correlationId}' already exists.");
+        }
+
+        try
+        {
+            var published = await _producer.Publish(input, new PublishOptions
             {
-                while (timeoutCancellationTokenSource.Token.IsCancellationRequested == false)
-                {
-                    var result = _awaitedOperations[correlationId];
-                    if (result.Result != null)
-                    {
-                        return (TOutputMessage)result.Result;
-                    }
-                    Task.Delay(100);
-                }
-                return default;
-            });
-            Task completedTask = await Task.WhenAny(task, Task.Delay((int)TimeSpan.FromMinutes(1).TotalMilliseconds, timeoutCancellationTokenSource.Token));
-            await timeoutCancellationTokenSource.CancelAsync();
-            if (completedTask == task)
+                CorrelationId = correlationId,
+                ReplyTo = ((RabbitMQExtension)_builder.Extension).ReplyQueueName,
+                Destination = _nameResolver.ResolveOutboundName(typeof(TInputMessage))
+            }, cancellationToken);
+
+            if (!published)
             {
-                return await task;  // Very important in order to propagate exceptions
+                throw new InvalidOperationException("Failed to publish RPC request.");
             }
-            else
+
+            using var timeoutCts = new CancellationTokenSource(_settings.RpcTimeout);
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
+            try
             {
-                _awaitedOperations.TryUpdate(correlationId, _awaitedOperations[correlationId] with { Timedout = true }, _awaitedOperations[correlationId]);
+                IMessage result = await tcs.Task.WaitAsync(linkedCts.Token);
+                return (TOutputMessage)result;
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            {
+                tcs.TrySetCanceled();
                 throw new TimeoutException("The operation has timed out.");
             }
         }
-
+        finally
+        {
+            _awaitedOperations.TryRemove(correlationId, out _);
+        }
     }
 }

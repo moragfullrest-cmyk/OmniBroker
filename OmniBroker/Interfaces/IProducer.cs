@@ -1,3 +1,5 @@
+using OmniBroker.Infrastructure;
+
 namespace OmniBroker;
 
 public interface IProducer<TMessage> where TMessage : IMessage
@@ -5,5 +7,5 @@ public interface IProducer<TMessage> where TMessage : IMessage
     /// <summary>
     /// Отправить сообщение в брокер
     /// </summary>
-    public Task<bool> Publish(TMessage message);
+    Task<bool> Publish(TMessage message, PublishOptions? options = null, CancellationToken cancellationToken = default);
 }

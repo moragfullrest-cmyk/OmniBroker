@@ -1,23 +1,28 @@
-
 using Microsoft.Extensions.DependencyInjection;
 
 namespace OmniBroker.Infrastructure;
 
-public class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TMessage : IMessage
+public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TMessage : IMessage
 {
+    private readonly IReadOnlyList<IProducer<TMessage>> _producers;
+
     public MultiBrokerProducer(IServiceProvider services)
     {
         var builders = services.GetServices<BrokerOptionsBuilder>();
-        Producers = builders.SelectMany(_ => services.GetKeyedServices<IProducer<TMessage>>(_.BrokerId));
+        _producers = builders.SelectMany(_ => services.GetKeyedServices<IProducer<TMessage>>(_.BrokerId)).ToList();
     }
 
-    public IEnumerable<IProducer<TMessage>> Producers { get; set; } = [];
-    public async Task<bool> Publish(TMessage message)
+    public async Task<bool> Publish(TMessage message, PublishOptions? options = null, CancellationToken cancellationToken = default)
     {
-        var result = true;
-        foreach (var producer in Producers)
+        if (_producers.Count == 0)
         {
-            result &= await producer.Publish(message);
+            return false;
+        }
+
+        var result = true;
+        foreach (var producer in _producers)
+        {
+            result &= await producer.Publish(message, options, cancellationToken);
         }
         return result;
     }

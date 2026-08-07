@@ -50,10 +50,15 @@ internal class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
         ReadOnlyMemory<byte> body,
         CancellationToken cancellationToken = default)
     {
-
-        if (_handlers.TryGetValue(exchange, out HandlerWrapper? handler))
+        if (!_handlers.TryGetValue(exchange, out HandlerWrapper? handler))
         {
-            var scope = _serviceProvider.CreateScope();
+            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken);
+            return;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        try
+        {
             IMessage message = _messageActivators[exchange]();
             message.Body = body.ToArray();
             message.CorrelationId = properties.CorrelationId;
@@ -66,14 +71,27 @@ internal class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
                     ReplyInfo = new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo }
                 });
             }
+
+            if (result)
+            {
+                await _channel.BasicAckAsync(deliveryTag, multiple: false, cancellationToken);
+            }
+            else
+            {
+                await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken);
+            }
+        }
+        catch
+        {
+            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken);
         }
     }
 
-    public override Task HandleChannelShutdownAsync(object channel, ShutdownEventArgs reason)
+    public override async Task HandleChannelShutdownAsync(object channel, ShutdownEventArgs reason)
     {
         BrokerOptionsBuilder builder = _serviceProvider.GetServices<BrokerOptionsBuilder>().First(_ => _.BrokerId == _brokerId);
-        builder.Extension.StartInfrastructure(_serviceProvider, builder);
-        builder.Extension.StartConsumers(_serviceProvider, builder);
-        return base.HandleChannelShutdownAsync(channel, reason);
+        var extension = (RabbitMQExtension)builder.Extension;
+        await extension.RecoverAsync(_serviceProvider, builder);
+        await base.HandleChannelShutdownAsync(channel, reason);
     }
 }

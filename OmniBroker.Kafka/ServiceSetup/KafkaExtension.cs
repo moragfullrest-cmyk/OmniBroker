@@ -22,10 +22,14 @@ internal class KafkaExtension(KafkaSettings settings) : IBrokerExtension
             var config = new ConsumerConfig
             {
                 BootstrapServers = settings.Hosts,
-                Acks = Acks.All,
                 RetryBackoffMs = 100,
-                GroupId = builder.SetupName
+                GroupId = settings.GroupId ?? builder.SetupName,
+                EnableAutoCommit = false,
+                AutoOffsetReset = settings.AutoOffsetReset,
             };
+            if (settings.ClientId is not null)
+                config.ClientId = settings.ClientId;
+            ApplySecurity(config);
             return new ConsumerBuilder<string, byte[]>(config).Build();
         });
 
@@ -38,7 +42,8 @@ internal class KafkaExtension(KafkaSettings settings) : IBrokerExtension
     }
     public async Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
     {
-        services.AddKeyedSingleton<INameResolver, KafkaNameResolver>(builder.BrokerId);
+        ArgumentNullException.ThrowIfNull(builder.NameResolver);
+        services.AddKeyedSingleton<INameResolver>(builder.BrokerId, builder.NameResolver);
     }
     public async Task SetupProducers(IServiceCollection services, BrokerOptionsBuilder builder)
     {
@@ -55,6 +60,9 @@ internal class KafkaExtension(KafkaSettings settings) : IBrokerExtension
                 MessageSendMaxRetries = 3,
                 RetryBackoffMs = 100
             };
+            if (settings.ClientId is not null)
+                config.ClientId = settings.ClientId;
+            ApplySecurity(config);
             return new ProducerBuilder<string, byte[]>(config).Build();
         });
 
@@ -84,4 +92,16 @@ internal class KafkaExtension(KafkaSettings settings) : IBrokerExtension
     { }
     public async Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     { }
+
+    private void ApplySecurity(ClientConfig config)
+    {
+        if (settings.SecurityProtocol is { } protocol)
+            config.SecurityProtocol = protocol;
+        if (settings.SaslMechanism is { } mechanism)
+            config.SaslMechanism = mechanism;
+        if (settings.SaslUsername is not null)
+            config.SaslUsername = settings.SaslUsername;
+        if (settings.SaslPassword is not null)
+            config.SaslPassword = settings.SaslPassword;
+    }
 }

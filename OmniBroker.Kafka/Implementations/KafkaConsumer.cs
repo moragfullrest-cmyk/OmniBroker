@@ -3,7 +3,6 @@ using System.Reflection;
 using Confluent.Kafka;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
-using OmniBroker.Kafka.ServiceSetup;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -48,10 +47,10 @@ internal class KafkaConsumer : BackgroundService
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
-        _handlers.Keys.ToList().ForEach(h =>
+        if (_handlers.Count > 0)
         {
-            _consumer.Subscribe(h);
-        });
+            _consumer.Subscribe(_handlers.Keys);
+        }
 
         return base.StartAsync(cancellationToken);
     }
@@ -64,28 +63,37 @@ internal class KafkaConsumer : BackgroundService
             try
             {
                 ConsumeResult<string, byte[]>? receivedMessage = _consumer?.Consume(stoppingToken);
-                if (receivedMessage?.Message?.Value == null || receivedMessage.Message.Value.Length == 0)
+                if (receivedMessage is null)
                     continue;
+                if (receivedMessage.Message?.Value == null || receivedMessage.Message.Value.Length == 0)
+                {
+                    _consumer.Commit(receivedMessage);
+                    continue;
+                }
 
                 if (_handlers.TryGetValue(receivedMessage.Topic, out HandlerWrapper? handler))
                 {
-                    var scope = _serviceProvider.CreateScope();
+                    using var scope = _serviceProvider.CreateScope();
                     IMessage message = _messageActivators[receivedMessage.Topic]();
                     if (message != null)
                     {
                         message.Body = receivedMessage.Message.Value;
                         bool result = true;
-                        foreach (Func<IServiceProvider, IMessage, MessageContext, Task<bool>> _delegate in handler.Handlers)
+                        foreach (Func<IServiceProvider, IMessage, MessageContext, Task<bool>> handlerDelegate in handler.Handlers)
                         {
-                            result &= await _delegate(scope.ServiceProvider, message, new MessageContext
+                            result &= await handlerDelegate(scope.ServiceProvider, message, new MessageContext
                             {
                                 CurrentBrokerId = _brokerId
                             });
                         }
                         if (result)
-                            _consumer?.Commit(receivedMessage);
+                            _consumer.Commit(receivedMessage);
                     }
                 }
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
             }
             catch (ConsumeException ex)
             {
@@ -100,13 +108,15 @@ internal class KafkaConsumer : BackgroundService
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_consumer != null)
+        try
+        {
+            await base.StopAsync(cancellationToken);
+        }
+        finally
         {
             _logger.LogInformation("Closing Kafka consumer...");
             _consumer.Close();
-            _consumer.Dispose();
+            // Do NOT Dispose here — IConsumer is keyed singleton owned by DI
         }
-
-        await base.StopAsync(cancellationToken);
     }
 }

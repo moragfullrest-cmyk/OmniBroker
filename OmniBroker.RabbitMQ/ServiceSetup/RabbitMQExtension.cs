@@ -12,35 +12,28 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
 {
     private readonly HashSet<Type> _replyTypes = [];
     public BrokerId BrokerId { get; set; }
-    public string ReplyQueueName;
+    public string ReplyQueueName { get; set; } = null!;
 
-    public async Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
+    public Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
     {
-        ConnectionFactory factory = new()
-        {
-            UserName = settings.UserName,
-            Password = settings.Password,
-            HostName = settings.HostName
-        };
+        services.AddKeyedSingleton(BrokerId, settings);
+        services.AddKeyedSingleton(BrokerId, new RabbitMqRuntime());
 
         services.AddKeyedSingleton(BrokerId, (s, _) =>
         {
-            IConnection connection = factory.CreateConnectionAsync().GetAwaiter().GetResult();
-            return connection;
+            RabbitMqRuntime runtime = s.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+            return runtime.RequireConnection();
         });
 
         services.AddKeyedSingleton(BrokerId, (s, _) =>
         {
-            return new ConcurrentObjectPool<IChannel>(() =>
-            {
-                IConnection connection = s.GetRequiredKeyedService<IConnection>(BrokerId);
-                IChannel channel = connection.CreateChannelAsync().GetAwaiter().GetResult();
-                channel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false).GetAwaiter().GetResult();
-                return channel;
-            });
+            RabbitMqRuntime runtime = s.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+            return runtime.RequireChannelPool();
         });
 
         services.AddKeyedSingleton<INameResolver>(BrokerId, builder.NameResolver);
+
+        return Task.CompletedTask;
     }
 
     public async Task SetupConsumers(IServiceCollection services, BrokerOptionsBuilder builder)
@@ -53,7 +46,7 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
 
     public async Task SetupRpc(IServiceCollection services, BrokerOptionsBuilder builder)
     {
-        services.AddKeyedSingleton(BrokerId, new ConcurrentDictionary<string, PendingOperation>());
+        services.AddKeyedSingleton(BrokerId, new ConcurrentDictionary<string, TaskCompletionSource<IMessage>>());
 
         foreach (var t in builder.RpcCallers)
         {
@@ -65,7 +58,7 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(t.Key);
                 return Activator.CreateInstance(producerType,
-                    s.GetService(typeof(ILogger<>).MakeGenericType(producerType)),
+                    s.GetRequiredService(typeof(ILogger<>).MakeGenericType(producerType)),
                     s.GetRequiredKeyedService<ConcurrentObjectPool<IChannel>>(obj),
                     s.GetRequiredKeyedService<INameResolver>(obj));
             });
@@ -100,29 +93,21 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(returnType);
                 return Activator.CreateInstance(producerType,
-                    s.GetService(typeof(ILogger<>).MakeGenericType(producerType)),
+                    s.GetRequiredService(typeof(ILogger<>).MakeGenericType(producerType)),
                     s.GetRequiredKeyedService<ConcurrentObjectPool<IChannel>>(obj),
                     s.GetRequiredKeyedService<INameResolver>(obj));
             });
         }
     }
 
-    private static Func<ConcurrentDictionary<string, PendingOperation>, TOutput, Task<bool>> CreateCorrelationDelegate<TOutput>()
+    private static Func<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>, TOutput, Task<bool>> CreateCorrelationDelegate<TOutput>()
         where TOutput : IMessage
     {
-        return (ConcurrentDictionary<string, PendingOperation> operations, TOutput message) =>
+        return (operations, message) =>
         {
-            if (operations.ContainsKey(message.CorrelationId))
+            if (operations.TryRemove(message.CorrelationId, out TaskCompletionSource<IMessage>? tcs))
             {
-                PendingOperation op = operations[message.CorrelationId];
-                if (op.Timedout)
-                {
-                    operations.TryRemove(message.CorrelationId, out _);
-                }
-                else
-                {
-                    operations.TryUpdate(message.CorrelationId, op with { Result = message }, op);
-                }
+                tcs.TrySetResult(message);
             }
             return Task.FromResult(true);
         };
@@ -134,12 +119,19 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
         return async (IServiceProvider provider, IMessage message, MessageContext context) =>
         {
             TOutput result = await OmniBroker.BrokerExtensions.WrapActionDelegate<TOutput>(action)(provider, message, context);
-            var producer = (RabbitMQBasicProducer<TOutput>)provider.GetRequiredKeyedService<IProducer<TOutput>>(context.CurrentBrokerId);
-            producer.CorrelationId = message.CorrelationId;
+            var producer = provider.GetRequiredKeyedService<IProducer<TOutput>>(context.CurrentBrokerId);
             var builder = provider.GetRequiredKeyedService<BrokerOptionsBuilder>(context.CurrentBrokerId);
-            producer.ExchangeName = builder.NameResolver.ResolveOutboundName(typeof(TOutput));
-            result.Tag = ((RabbitMQReplyInfo)context.ReplyInfo).ReplyTo;
-            return await producer.Publish(result);
+            if (context.ReplyInfo is not RabbitMQReplyInfo replyInfo
+                || string.IsNullOrEmpty(replyInfo.ReplyTo))
+            {
+                throw new InvalidOperationException("RPC reply requires ReplyInfo.ReplyTo.");
+            }
+            result.Tag = replyInfo.ReplyTo;
+            return await producer.Publish(result, new PublishOptions
+            {
+                CorrelationId = message.CorrelationId,
+                Destination = builder.NameResolver.ResolveOutboundName(typeof(TOutput))
+            });
         };
     }
 
@@ -155,7 +147,7 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(type);
                 return Activator.CreateInstance(producerType,
-                    s.GetService(typeof(ILogger<>).MakeGenericType(producerType)),
+                    s.GetRequiredService(typeof(ILogger<>).MakeGenericType(producerType)),
                     s.GetRequiredKeyedService<ConcurrentObjectPool<IChannel>>(obj),
                     s.GetRequiredKeyedService<INameResolver>(obj));
             });
@@ -164,48 +156,99 @@ internal class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
 
     public async Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     {
-        IConnection connection = serviceProvider.GetRequiredKeyedService<IConnection>(BrokerId);
+        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+
+        if (runtime.Connection is null)
+        {
+            ConnectionFactory factory = new()
+            {
+                UserName = settings.UserName,
+                Password = settings.Password,
+                HostName = settings.HostName,
+                VirtualHost = settings.VirtualHost,
+                Port = settings.Port
+            };
+
+            if (settings.UseTls)
+            {
+                factory.Ssl = new SslOption
+                {
+                    Enabled = true,
+                    ServerName = settings.HostName
+                };
+            }
+
+            IConnection connection = await factory.CreateConnectionAsync();
+            runtime.Connection = connection;
+
+            runtime.ChannelPool = new ConcurrentObjectPool<IChannel>(
+                () => connection.CreateChannelAsync().GetAwaiter().GetResult(),
+                settings.MaxChannelPoolSize);
+        }
+
         INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerId);
-        await TopologyDeclarer.EnsureProducersDeclared(connection, nameResolver, builder);
-        await TopologyDeclarer.EnsureConsumersDeclared(connection, nameResolver, builder);
-        await TopologyDeclarer.EnsureRpcDeclared(connection, nameResolver, builder);
+        await TopologyDeclarer.EnsureProducersDeclared(runtime.Connection, nameResolver, builder);
+        await TopologyDeclarer.EnsureConsumersDeclared(runtime.Connection, nameResolver, builder);
+        await TopologyDeclarer.EnsureRpcDeclared(runtime.Connection, nameResolver, builder);
+    }
+
+    internal async Task RecoverAsync(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
+    {
+        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+        await runtime.ReconnectLock.WaitAsync();
+        try
+        {
+            await runtime.ResetConnectionAsync();
+            await StartInfrastructure(serviceProvider, builder);
+            await StartConsumers(serviceProvider, builder);
+        }
+        finally
+        {
+            runtime.ReconnectLock.Release();
+        }
     }
 
     public async Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder)
     {
         INameResolver resolver = services.GetRequiredKeyedService<INameResolver>(BrokerId);
         IChannel channel = services.GetRequiredKeyedService<ConcurrentObjectPool<IChannel>>(BrokerId).Get();
+        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
         IEnumerable<HandlerWrapper> handlers = services.GetKeyedServices<HandlerWrapper>(BrokerId);
         if (handlers.Any() == false)
             return;
         var consumer = new RabbitMQBasicConsumer(services, channel, builder.BrokerId);
         BrokerOptionsBuilder optionsBuilder = services.GetServices<BrokerOptionsBuilder>().First(_ => _.BrokerId == BrokerId);
 
+        bool replyQueueConsumed = false;
         foreach (HandlerWrapper handler in handlers)
         {
             if (_replyTypes.Contains(handler.MessageType))
             {
-                await channel.BasicConsumeAsync(
-                            queue: ReplyQueueName,
-                            autoAck: true,
-                            consumer: consumer,
-                            CancellationToken.None);
+                if (!replyQueueConsumed)
+                {
+                    await channel.BasicConsumeAsync(
+                                queue: ReplyQueueName,
+                                autoAck: false,
+                                consumer: consumer,
+                                CancellationToken.None);
+                    replyQueueConsumed = true;
+                }
             }
             else
             {
                 await channel.BasicConsumeAsync(
                             queue: resolver.ResolveInboundName(handler.MessageType),
-                            autoAck: true,
+                            autoAck: false,
                             consumer: consumer,
                             CancellationToken.None);
             }
         }
 
-        if (builder.RpcCallers.Count > 0)
+        if (builder.RpcCallers.Count > 0 && !replyQueueConsumed)
         {
             await channel.BasicConsumeAsync(
                 queue: ((RabbitMQExtension)optionsBuilder.Extension).ReplyQueueName,
-                autoAck: true,
+                autoAck: false,
                 consumer: consumer,
                 CancellationToken.None);
         }

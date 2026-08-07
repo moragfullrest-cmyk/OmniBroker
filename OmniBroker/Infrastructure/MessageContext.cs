@@ -4,6 +4,6 @@ namespace OmniBroker.Infrastructure;
 
 internal sealed class MessageContext
 {
-    public BrokerId CurrentBrokerId { get; set; }
-    public IReplyInfo ReplyInfo { get; set; }
+    public required BrokerId CurrentBrokerId { get; init; }
+    public IReplyInfo? ReplyInfo { get; init; }
 }

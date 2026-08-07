@@ -1,8 +1,8 @@
-using OmniBroker.Infrastructure;
+using OmniBroker.Interfaces;
 
-namespace OmniBroker.Kafka.ServiceSetup;
+namespace OmniBroker.Infrastructure;
 
-internal class HandlerWrapper
+internal sealed class HandlerWrapper
 {
     public required Type MessageType { get; init; }
     public required List<Func<IServiceProvider, IMessage, MessageContext, Task<bool>>> Handlers { get; init; }

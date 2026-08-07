@@ -20,7 +20,7 @@ builder.Services.AddBroker(options =>
         UserName = "guest",
         Password = "guest",
     });
-    options.AddProviderFor<ExampleMessage>();
+    options.AddProducerFor<ExampleMessage>();
     options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"RabbitMQ received: {m.Text}"); return Task.FromResult(true); });
     options.AddConsumerFor<ExampleMessage>(MessageHandler.HandleMyMessage);
     options.AddRpcCaller<ExampleMessage2, ExampleMessage3>();
@@ -35,7 +35,7 @@ builder.Services.AddBroker(options =>
 //{
 //    options.SetupName = "Example";
 //    options.UseKafka(new KafkaSettings { Hosts = "localhost:9092" });
-//    options.AddProviderFor<ExampleMessage>();
+//    options.AddProducerFor<ExampleMessage>();
 //    options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"Kafka received: {m.Text}"); return Task.FromResult(true); });
 //});
 

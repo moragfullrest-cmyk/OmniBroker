@@ -12,13 +12,17 @@ public static class BrokerExtensions
     /// Запустить работу с брокерами
     /// </summary>
     public static IHost UseBrokers(this IHost host)
-    {
-        IEnumerable<BrokerOptionsBuilder> builders = host.Services.GetServices<BrokerOptionsBuilder>();
+        => UseBrokersAsync(host).GetAwaiter().GetResult();
 
-        foreach (var builder in builders)
+    /// <summary>
+    /// Асинхронно запустить работу с брокерами
+    /// </summary>
+    public static async Task<IHost> UseBrokersAsync(this IHost host)
+    {
+        foreach (var builder in host.Services.GetServices<BrokerOptionsBuilder>())
         {
-            builder.Extension.StartInfrastructure(host.Services, builder).GetAwaiter().GetResult();
-            builder.Extension.StartConsumers(host.Services, builder).GetAwaiter().GetResult();
+            await builder.Extension.StartInfrastructure(host.Services, builder);
+            await builder.Extension.StartConsumers(host.Services, builder);
         }
 
         return host;
@@ -49,27 +53,16 @@ public static class BrokerExtensions
     }
 
     /// <summary>
-    /// Добавить провайдера для сообщения к этому брокеру
+    /// Добавить продюсера для сообщения к этому брокеру
     /// </summary>
-    public static BrokerOptionsBuilder AddProviderFor<TMessage>(this BrokerOptionsBuilder optionsBuilder) where TMessage : IMessage
+    public static BrokerOptionsBuilder AddProducerFor<TMessage>(this BrokerOptionsBuilder optionsBuilder) where TMessage : IMessage
     {
-        var inputType = typeof(TMessage);
-
+        Type inputType = typeof(TMessage);
+        EnsureConcreteMessageType(inputType);
         if (optionsBuilder.Producables.Contains(inputType))
-            throw new ArgumentException($"Producer with type {inputType.FullName} already registered");
-        if (inputType.IsAbstract || inputType.IsInterface)
-            throw new ArgumentException($"Message type has to be a concrete non abstract type");
-
-        if (optionsBuilder.RpcCallers.ContainsKey(inputType))
-            throw new ArgumentException($"Message of type {inputType} is already registered for RPC messaging");
-        if (optionsBuilder.RpcCallers.ContainsValue(inputType))
-            throw new ArgumentException($"Message of type {inputType} is already registered for RPC messaging");
-
-        if (optionsBuilder.RpcReceivers.ContainsKey(inputType))
-            throw new ArgumentException($"Message of type {inputType} is already registered for RPC messaging");
-
+            throw new ArgumentException($"Message of type {inputType} is already registered as producer");
+        EnsureNotInRpc(optionsBuilder, inputType);
         optionsBuilder.Producables.Add(inputType);
-
         return optionsBuilder;
     }
 
@@ -82,8 +75,7 @@ public static class BrokerExtensions
         ArgumentNullException.ThrowIfNull(action);
         Type messageType = typeof(TMessage);
 
-        if (typeof(TMessage).IsAbstract || typeof(TMessage).IsInterface)
-            throw new ArgumentException($"Message type has to be a concrete non abstract type");
+        EnsureConcreteMessageType(messageType);
 
         if (action.GetMethodInfo().ReturnType != typeof(Task<bool>))
             throw new ArgumentException("Consuming method has to return Task<bool>");
@@ -91,13 +83,7 @@ public static class BrokerExtensions
         if (action.GetMethodInfo().GetParameters().Any(_ => _.ParameterType == typeof(TMessage)) == false)
             throw new ArgumentException($"One of method parameters has to be of type {typeof(TMessage).Name}");
 
-        if (optionsBuilder.RpcCallers.ContainsKey(messageType))
-            throw new ArgumentException($"Message of type {messageType} is already registered for RPC messaging");
-        if (optionsBuilder.RpcCallers.ContainsValue(messageType))
-            throw new ArgumentException($"Message of type {messageType} is already registered for RPC messaging");
-
-        if (optionsBuilder.RpcReceivers.ContainsKey(messageType))
-            throw new ArgumentException($"Message of type {messageType} is already registered for RPC messaging");
+        EnsureNotInRpc(optionsBuilder, messageType);
 
         if (optionsBuilder.Consumables.ContainsKey(messageType) == false)
             optionsBuilder.Consumables[messageType] = [WrapActionDelegate<bool>(action)];
@@ -111,13 +97,27 @@ public static class BrokerExtensions
         where TInputMessage : IMessage
         where TOutputMessage : IMessage
     {
-        var inputType = typeof(TInputMessage);
-        var outputType = typeof(TOutputMessage);
-        if (optionsBuilder.Producables.Contains(inputType))
-            throw new ArgumentException($"Input message of type {inputType} is already registered for regular messaging");
-        if (optionsBuilder.Producables.Contains(outputType))
-            throw new ArgumentException($"Output message of type {outputType} is already registered for regular messaging");
-        optionsBuilder.RpcCallers.Add(typeof(TInputMessage), typeof(TOutputMessage));
+        Type inputType = typeof(TInputMessage);
+        Type outputType = typeof(TOutputMessage);
+
+        EnsureConcreteMessageType(inputType);
+        EnsureConcreteMessageType(outputType);
+        EnsureNotInRegularMessaging(optionsBuilder, inputType);
+        EnsureNotInRegularMessaging(optionsBuilder, outputType);
+
+        if (optionsBuilder.RpcCallers.ContainsKey(inputType))
+            throw new ArgumentException($"RPC caller for input type {inputType} is already registered");
+        if (optionsBuilder.RpcCallers.ContainsValue(outputType))
+            throw new ArgumentException($"Message of type {outputType} is already registered as RPC output");
+        if (optionsBuilder.RpcCallers.ContainsKey(outputType))
+            throw new ArgumentException($"Message of type {outputType} is already registered as RPC input");
+        if (optionsBuilder.RpcCallers.ContainsValue(inputType))
+            throw new ArgumentException($"Message of type {inputType} is already registered as RPC output");
+        if (optionsBuilder.RpcReceivers.ContainsKey(outputType))
+            throw new ArgumentException($"Message of type {outputType} is already registered as RPC receive input");
+        // RpcReceivers.ContainsKey(inputType) is allowed: receiver may already be registered for this pair.
+
+        optionsBuilder.RpcCallers.Add(inputType, outputType);
         return optionsBuilder;
     }
 
@@ -125,17 +125,69 @@ public static class BrokerExtensions
         where TInputMessage : IMessage
         where TOutputMessage : IMessage
     {
+        ArgumentNullException.ThrowIfNull(action);
+
+        Type inputType = typeof(TInputMessage);
+        Type outputType = typeof(TOutputMessage);
+
+        EnsureConcreteMessageType(inputType);
+        EnsureConcreteMessageType(outputType);
+
         if (action.GetMethodInfo().ReturnType != typeof(Task<TOutputMessage>))
             throw new ArgumentException($"Consuming method has to return Task<{nameof(TOutputMessage)}>");
 
         if (action.GetMethodInfo().GetParameters().Any(_ => _.ParameterType == typeof(TInputMessage)) == false)
             throw new ArgumentException($"One of method parameters has to be of type {nameof(TInputMessage)}");
 
-        if (optionsBuilder.RpcReceivers.ContainsKey(typeof(TInputMessage)))
-            throw new ArgumentException($"Only one receiver for input type {typeof(TInputMessage)} can be registered");
-        optionsBuilder.RpcReceivers.Add(typeof(TInputMessage), action);
+        EnsureNotInRegularMessaging(optionsBuilder, inputType);
+        EnsureNotInRegularMessaging(optionsBuilder, outputType);
 
+        if (optionsBuilder.RpcReceivers.ContainsKey(inputType))
+            throw new ArgumentException($"RPC receiver for input type {inputType} is already registered");
+
+        if (optionsBuilder.RpcCallers.ContainsKey(inputType))
+        {
+            if (optionsBuilder.RpcCallers[inputType] != outputType)
+                throw new ArgumentException($"RPC receiver output type {outputType} does not match registered caller output {optionsBuilder.RpcCallers[inputType]}");
+            // Matching caller already registered for this pair — allow.
+        }
+        else
+        {
+            if (optionsBuilder.RpcCallers.ContainsValue(inputType))
+                throw new ArgumentException($"Message of type {inputType} is already registered as RPC output");
+            if (optionsBuilder.RpcCallers.ContainsKey(outputType))
+                throw new ArgumentException($"Message of type {outputType} is already registered as RPC input");
+            if (optionsBuilder.RpcCallers.ContainsValue(outputType))
+                throw new ArgumentException($"Message of type {outputType} is already registered as RPC output");
+        }
+
+        if (optionsBuilder.RpcReceivers.ContainsKey(outputType))
+            throw new ArgumentException($"Message of type {outputType} is already registered as RPC receive input");
+
+        optionsBuilder.RpcReceivers.Add(inputType, action);
         return optionsBuilder;
+    }
+
+    private static void EnsureConcreteMessageType(Type messageType)
+    {
+        if (messageType.IsAbstract || messageType.IsInterface)
+            throw new ArgumentException("Message type has to be a concrete non abstract type");
+    }
+
+    private static void EnsureNotInRegularMessaging(BrokerOptionsBuilder optionsBuilder, Type messageType)
+    {
+        if (optionsBuilder.Producables.Contains(messageType))
+            throw new ArgumentException($"Message of type {messageType} is already registered as producer");
+        if (optionsBuilder.Consumables.ContainsKey(messageType))
+            throw new ArgumentException($"Message of type {messageType} is already registered as consumer");
+    }
+
+    private static void EnsureNotInRpc(BrokerOptionsBuilder optionsBuilder, Type messageType)
+    {
+        if (optionsBuilder.RpcCallers.ContainsKey(messageType)
+            || optionsBuilder.RpcCallers.ContainsValue(messageType)
+            || optionsBuilder.RpcReceivers.ContainsKey(messageType))
+            throw new ArgumentException($"Message of type {messageType} is already registered for RPC messaging");
     }
 
     internal static Func<IServiceProvider, IMessage, MessageContext, Task<TResult>> WrapActionDelegate<TResult>(Delegate @delegate)

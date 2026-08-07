@@ -1,5 +1,5 @@
-
 using Confluent.Kafka;
+using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using Microsoft.Extensions.Logging;
 
@@ -9,22 +9,20 @@ internal class KafkaProducer<TMessage>(
     ILogger<KafkaProducer<TMessage>> logger,
     IProducer<string, byte[]> producer,
     INameResolver nameResolver
-    ) : IProducer<TMessage> where TMessage : IMessage
+    ) : OmniBroker.IProducer<TMessage> where TMessage : IMessage
 {
-    public async Task<bool> Publish(TMessage message)
+    public async Task<bool> Publish(TMessage message, PublishOptions? options = null, CancellationToken cancellationToken = default)
     {
         try
         {
-            Type messageType = typeof(TMessage);
-            string topicName = nameResolver.ResolveOutboundName(messageType);
-            await producer.ProduceAsync(topicName, new Message<string, byte[]> { Key = message.Tag, Value = message.Body });
+            string topicName = options?.Destination ?? nameResolver.ResolveOutboundName(typeof(TMessage));
+            await producer.ProduceAsync(topicName, new Message<string, byte[]> { Key = message.Tag, Value = message.Body }, cancellationToken);
             return true;
         }
-        catch (ProduceException<Null, string> e)
+        catch (ProduceException<string, byte[]> e)
         {
             logger.LogWarning(e, "Delivery failed: {Reason}", e.Error.Reason);
             return false;
-
         }
     }
 }

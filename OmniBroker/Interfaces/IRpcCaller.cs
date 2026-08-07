@@ -4,5 +4,5 @@ public interface IRpcCaller<TInputMessage, TOutputMessage>
     where TInputMessage : IMessage
     where TOutputMessage : IMessage
 {
-    Task<TOutputMessage> Call(TInputMessage input);
+    Task<TOutputMessage> Call(TInputMessage input, CancellationToken cancellationToken = default);
 }
