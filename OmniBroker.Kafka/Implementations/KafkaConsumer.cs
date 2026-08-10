@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text;
 using Confluent.Kafka;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
@@ -9,7 +10,7 @@ using Microsoft.Extensions.Logging;
 
 namespace OmniBroker.Kafka.Implementations;
 
-internal class KafkaConsumer : BackgroundService
+internal sealed class KafkaConsumer : BackgroundService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly Dictionary<string, HandlerWrapper> _handlers;
@@ -60,9 +61,10 @@ internal class KafkaConsumer : BackgroundService
         await Task.Yield();
         while (stoppingToken.IsCancellationRequested == false)
         {
+            ConsumeResult<string, byte[]>? receivedMessage = null;
             try
             {
-                ConsumeResult<string, byte[]>? receivedMessage = _consumer?.Consume(stoppingToken);
+                receivedMessage = _consumer.Consume(stoppingToken);
                 if (receivedMessage is null)
                     continue;
                 if (receivedMessage.Message?.Value == null || receivedMessage.Message.Value.Length == 0)
@@ -71,25 +73,39 @@ internal class KafkaConsumer : BackgroundService
                     continue;
                 }
 
-                if (_handlers.TryGetValue(receivedMessage.Topic, out HandlerWrapper? handler))
+                if (!_handlers.TryGetValue(receivedMessage.Topic, out HandlerWrapper? handler))
                 {
-                    using var scope = _serviceProvider.CreateScope();
-                    IMessage message = _messageActivators[receivedMessage.Topic]();
-                    if (message != null)
-                    {
-                        message.Body = receivedMessage.Message.Value;
-                        bool result = true;
-                        foreach (Func<IServiceProvider, IMessage, MessageContext, Task<bool>> handlerDelegate in handler.Handlers)
-                        {
-                            result &= await handlerDelegate(scope.ServiceProvider, message, new MessageContext
-                            {
-                                CurrentBrokerId = _brokerId
-                            });
-                        }
-                        if (result)
-                            _consumer.Commit(receivedMessage);
-                    }
+                    _logger.LogWarning(
+                        "No handler for topic {Topic}; committing and skipping. Offset={Offset}",
+                        receivedMessage.Topic,
+                        receivedMessage.Offset);
+                    _consumer.Commit(receivedMessage);
+                    continue;
                 }
+
+                using var scope = _serviceProvider.CreateScope();
+                IMessage message = _messageActivators[receivedMessage.Topic]();
+                message.Body = receivedMessage.Message.Value;
+                message.CorrelationId = ReadCorrelationId(receivedMessage.Message.Headers) ?? message.CorrelationId;
+
+                bool result = true;
+                foreach (Func<IServiceProvider, IMessage, MessageContext, Task<bool>> handlerDelegate in handler.Handlers)
+                {
+                    result &= await handlerDelegate(scope.ServiceProvider, message, new MessageContext
+                    {
+                        CurrentBrokerId = _brokerId
+                    });
+                }
+
+                if (!result)
+                {
+                    _logger.LogWarning(
+                        "Handler returned false; committing and skipping. Topic={Topic}, Offset={Offset}",
+                        receivedMessage.Topic,
+                        receivedMessage.Offset);
+                }
+
+                _consumer.Commit(receivedMessage);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -102,8 +118,31 @@ internal class KafkaConsumer : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error processing Kafka message");
+                if (receivedMessage is not null)
+                {
+                    try
+                    {
+                        _consumer.Commit(receivedMessage);
+                    }
+                    catch (Exception commitEx)
+                    {
+                        _logger.LogError(commitEx, "Failed to commit Kafka offset after handler error");
+                    }
+                }
             }
         }
+    }
+
+    private static string? ReadCorrelationId(Headers? headers)
+    {
+        if (headers is null)
+            return null;
+
+        IHeader? header = headers.FirstOrDefault(h => h.Key == KafkaMessageHeaders.CorrelationId);
+        if (header is null)
+            return null;
+
+        return Encoding.UTF8.GetString(header.GetValueBytes());
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)

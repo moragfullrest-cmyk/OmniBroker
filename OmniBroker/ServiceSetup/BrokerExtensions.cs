@@ -42,6 +42,12 @@ public static class BrokerExtensions
 
         options.Extension.BrokerId = options.BrokerId;
 
+        if ((options.RpcCallers.Count > 0 || options.RpcReceivers.Count > 0) && !options.Extension.SupportsRpc)
+        {
+            throw new ArgumentException(
+                $"Broker extension '{options.Extension.GetType().Name}' does not support RPC. Remove AddRpcCaller/AddRpcReceiver or use a transport that supports RPC.");
+        }
+
         options.Extension.SetupInfrastructure(services, options).GetAwaiter().GetResult();
         options.Extension.SetupProducers(services, options).GetAwaiter().GetResult();
         options.Extension.SetupConsumers(services, options).GetAwaiter().GetResult();
@@ -93,6 +99,9 @@ public static class BrokerExtensions
         return optionsBuilder;
     }
 
+    /// <summary>
+    /// Зарегистрировать RPC-вызывающую сторону для пары сообщений
+    /// </summary>
     public static BrokerOptionsBuilder AddRpcCaller<TInputMessage, TOutputMessage>(this BrokerOptionsBuilder optionsBuilder)
         where TInputMessage : IMessage
         where TOutputMessage : IMessage
@@ -121,6 +130,9 @@ public static class BrokerExtensions
         return optionsBuilder;
     }
 
+    /// <summary>
+    /// Зарегистрировать RPC-принимающую сторону с обработчиком запроса
+    /// </summary>
     public static BrokerOptionsBuilder AddRpcReceiver<TInputMessage, TOutputMessage>(this BrokerOptionsBuilder optionsBuilder, Delegate action)
         where TInputMessage : IMessage
         where TOutputMessage : IMessage

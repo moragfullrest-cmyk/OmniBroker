@@ -8,14 +8,15 @@ using Microsoft.Extensions.Logging;
 
 namespace OmniBroker.Kafka.ServiceSetup;
 
-internal class KafkaExtension(KafkaSettings settings) : IBrokerExtension
+internal sealed class KafkaExtension(KafkaSettings settings) : IBrokerExtension
 {
     public BrokerId BrokerId { get; set; }
+    public bool SupportsRpc => false;
 
-    public async Task SetupConsumers(IServiceCollection services, BrokerOptionsBuilder builder)
+    public Task SetupConsumers(IServiceCollection services, BrokerOptionsBuilder builder)
     {
         if (builder.Consumables.Count == 0)
-            return;
+            return Task.CompletedTask;
 
         services.AddKeyedSingleton(serviceKey: BrokerId, implementationFactory: (sp, o) =>
         {
@@ -39,16 +40,20 @@ internal class KafkaExtension(KafkaSettings settings) : IBrokerExtension
         }
 
         services.AddSingleton<IHostedService, KafkaConsumer>((s) => new KafkaConsumer(s, BrokerId, s.GetRequiredService<ILogger<KafkaConsumer>>(), s.GetRequiredKeyedService<INameResolver>(BrokerId)));
+
+        return Task.CompletedTask;
     }
-    public async Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
+    public Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder.NameResolver);
         services.AddKeyedSingleton<INameResolver>(builder.BrokerId, builder.NameResolver);
+
+        return Task.CompletedTask;
     }
-    public async Task SetupProducers(IServiceCollection services, BrokerOptionsBuilder builder)
+    public Task SetupProducers(IServiceCollection services, BrokerOptionsBuilder builder)
     {
         if (builder.Producables.Count == 0)
-            return;
+            return Task.CompletedTask;
 
         services.AddKeyedSingleton<IProducer<string, byte[]>>(serviceKey: BrokerId, implementationFactory: (sp, o) =>
         {
@@ -83,15 +88,13 @@ internal class KafkaExtension(KafkaSettings settings) : IBrokerExtension
             });
         }
 
+        return Task.CompletedTask;
     }
 
-    public async Task SetupRpc(IServiceCollection services, BrokerOptionsBuilder builder)
-    { }
+    public Task SetupRpc(IServiceCollection services, BrokerOptionsBuilder builder) => Task.CompletedTask;
 
-    public async Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder)
-    { }
-    public async Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
-    { }
+    public Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder) => Task.CompletedTask;
+    public Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder) => Task.CompletedTask;
 
     private void ApplySecurity(ClientConfig config)
     {

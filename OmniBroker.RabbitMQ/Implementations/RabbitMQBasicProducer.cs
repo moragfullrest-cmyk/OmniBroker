@@ -7,7 +7,7 @@ using RabbitMQ.Client.Exceptions;
 
 namespace OmniBroker.RabbitMQ.Implementations;
 
-internal class RabbitMQBasicProducer<TMessage>(
+internal sealed class RabbitMQBasicProducer<TMessage>(
     ILogger<RabbitMQBasicProducer<TMessage>> logger,
     ConcurrentObjectPool<IChannel> channelPool,
     INameResolver nameResolver
@@ -16,11 +16,16 @@ internal class RabbitMQBasicProducer<TMessage>(
 {
     public async Task<bool> Publish(TMessage message, PublishOptions? options = null, CancellationToken cancellationToken = default)
     {
-        IChannel channel = channelPool.Get();
+        IChannel channel = await channelPool.GetAsync(cancellationToken).ConfigureAwait(false);
+        var returned = false;
         try
         {
             if (channel.IsClosed)
+            {
+                await channelPool.DiscardAsync(channel).ConfigureAwait(false);
+                returned = true;
                 return false;
+            }
 
             string exchange = options?.Destination ?? nameResolver.ResolveOutboundName(typeof(TMessage));
 
@@ -36,7 +41,7 @@ internal class RabbitMQBasicProducer<TMessage>(
                 mandatory: true,
                 body: message.Body,
                 basicProperties: props,
-                cancellationToken: cancellationToken);
+                cancellationToken: cancellationToken).ConfigureAwait(false);
 
             return true;
         }
@@ -54,8 +59,13 @@ internal class RabbitMQBasicProducer<TMessage>(
         }
         finally
         {
-            if (channel.IsOpen)
-                channelPool.Return(channel);
+            if (!returned)
+            {
+                if (channel.IsOpen)
+                    channelPool.Return(channel);
+                else
+                    await channelPool.DiscardAsync(channel).ConfigureAwait(false);
+            }
         }
     }
 }

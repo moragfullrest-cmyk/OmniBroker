@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace OmniBroker.RabbitMQ.Implementations;
 
-internal class RabbitMQBasicRpcCaller<TInputMessage, TOutputMessage> : IRpcCaller<TInputMessage, TOutputMessage>
+internal sealed class RabbitMQBasicRpcCaller<TInputMessage, TOutputMessage> : IRpcCaller<TInputMessage, TOutputMessage>
     where TInputMessage : IMessage
     where TOutputMessage : IMessage
 {

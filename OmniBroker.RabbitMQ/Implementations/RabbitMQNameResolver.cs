@@ -2,7 +2,7 @@ using OmniBroker.Interfaces;
 
 namespace OmniBroker.RabbitMQ.Implementations;
 
-internal class RabbitMQNameResolver(string NamePrefix) : INameResolver
+internal sealed class RabbitMQNameResolver(string NamePrefix) : INameResolver
 {
     public string ResolveInboundName(Type messageType)
     {

@@ -19,6 +19,12 @@ public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TM
             return false;
         }
 
+        if (_producers.Count > 1 && options?.Destination is not null)
+        {
+            throw new InvalidOperationException(
+                "PublishOptions.Destination cannot be used with MultiBrokerProducer when more than one broker is registered for this message type.");
+        }
+
         var result = true;
         foreach (var producer in _producers)
         {

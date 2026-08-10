@@ -2,7 +2,7 @@ using OmniBroker.Interfaces;
 
 namespace OmniBroker.Kafka.Implementations;
 
-internal class KafkaNameResolver : INameResolver
+internal sealed class KafkaNameResolver : INameResolver
 {
     public string ResolveInboundName(Type messageType)
     {
@@ -12,10 +12,8 @@ internal class KafkaNameResolver : INameResolver
     }
     public string ResolveOutboundName(Type messageType)
     {
-        {
-            if (messageType.IsAssignableTo(typeof(IMessage)) == false)
-                throw new ArgumentException($"{messageType} has to implement {nameof(IMessage)}");
-            return messageType.Name;
-        }
+        if (messageType.IsAssignableTo(typeof(IMessage)) == false)
+            throw new ArgumentException($"{messageType} has to implement {nameof(IMessage)}");
+        return messageType.Name;
     }
 }

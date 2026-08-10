@@ -1,3 +1,4 @@
+using System.Text;
 using Confluent.Kafka;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
@@ -5,7 +6,7 @@ using Microsoft.Extensions.Logging;
 
 namespace OmniBroker.Kafka.Implementations;
 
-internal class KafkaProducer<TMessage>(
+internal sealed class KafkaProducer<TMessage>(
     ILogger<KafkaProducer<TMessage>> logger,
     IProducer<string, byte[]> producer,
     INameResolver nameResolver
@@ -16,7 +17,22 @@ internal class KafkaProducer<TMessage>(
         try
         {
             string topicName = options?.Destination ?? nameResolver.ResolveOutboundName(typeof(TMessage));
-            await producer.ProduceAsync(topicName, new Message<string, byte[]> { Key = message.Tag, Value = message.Body }, cancellationToken);
+            var kafkaMessage = new Message<string, byte[]>
+            {
+                Key = message.Tag,
+                Value = message.Body
+            };
+
+            string? correlationId = options?.CorrelationId ?? message.CorrelationId;
+            if (!string.IsNullOrEmpty(correlationId))
+            {
+                kafkaMessage.Headers = new Headers
+                {
+                    { KafkaMessageHeaders.CorrelationId, Encoding.UTF8.GetBytes(correlationId) }
+                };
+            }
+
+            await producer.ProduceAsync(topicName, kafkaMessage, cancellationToken);
             return true;
         }
         catch (ProduceException<string, byte[]> e)

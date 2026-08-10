@@ -3,9 +3,9 @@ namespace OmniBroker;
 public interface IMessage
 {
     /// <summary>
-    /// Набор тэгов которые могут быть у сообщения
+    /// Routing keys для bind очереди. Переопределите на типе сообщения при необходимости.
     /// </summary>
-    public static string[]? AcceptableTags { get; }
+    string[] GetAcceptableTags() => [""];
 
     /// <summary>
     /// Тело сообщения

@@ -4,27 +4,33 @@ using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ.ServiceSetup;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
 namespace OmniBroker.RabbitMQ.Implementations;
 
-internal class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
+internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly IChannel _channel;
     private readonly Dictionary<string, HandlerWrapper> _handlers;
     private readonly Dictionary<string, Func<IMessage>> _messageActivators = new Dictionary<string, Func<IMessage>>();
-
+    private readonly ILogger<RabbitMQBasicConsumer> _logger;
     private readonly BrokerId _brokerId;
 
-    public RabbitMQBasicConsumer(IServiceProvider serviceProvider, IChannel channel, BrokerId id) : base(channel)
+    public RabbitMQBasicConsumer(
+        IServiceProvider serviceProvider,
+        IChannel channel,
+        BrokerId id,
+        ILogger<RabbitMQBasicConsumer> logger) : base(channel)
     {
         _serviceProvider = serviceProvider;
         INameResolver nameResolver = _serviceProvider.GetRequiredKeyedService<INameResolver>(id);
         _channel = channel;
         _handlers = _serviceProvider.GetKeyedServices<HandlerWrapper>(id).ToDictionary(_ => nameResolver.ResolveOutboundName(_.MessageType));
         _brokerId = id;
+        _logger = logger;
 
         foreach (KeyValuePair<string, HandlerWrapper> handler in _handlers)
         {
@@ -40,6 +46,7 @@ internal class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
             _messageActivators.Add(handler.Key, expr.Compile());
         }
     }
+
     public override async Task HandleBasicDeliverAsync(
         string consumerTag,
         ulong deliveryTag,
@@ -52,6 +59,11 @@ internal class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
     {
         if (!_handlers.TryGetValue(exchange, out HandlerWrapper? handler))
         {
+            _logger.LogWarning(
+                "No handler for exchange {Exchange}; nacking delivery {DeliveryTag} (routingKey={RoutingKey})",
+                exchange,
+                deliveryTag,
+                routingKey);
             await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken);
             return;
         }
@@ -78,11 +90,22 @@ internal class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
             }
             else
             {
+                _logger.LogWarning(
+                    "Handler returned false; nacking delivery {DeliveryTag} (exchange={Exchange}, routingKey={RoutingKey})",
+                    deliveryTag,
+                    exchange,
+                    routingKey);
                 await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken);
             }
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogError(
+                ex,
+                "Error processing RabbitMQ message; nacking delivery {DeliveryTag} (exchange={Exchange}, routingKey={RoutingKey})",
+                deliveryTag,
+                exchange,
+                routingKey);
             await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken);
         }
     }

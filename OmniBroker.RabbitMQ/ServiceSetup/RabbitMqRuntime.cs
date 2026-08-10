@@ -6,6 +6,7 @@ internal sealed class RabbitMqRuntime
 {
     public IConnection? Connection { get; set; }
     public ConcurrentObjectPool<IChannel>? ChannelPool { get; set; }
+    public IChannel? ConsumerChannel { get; set; }
     public SemaphoreSlim ReconnectLock { get; } = new(1, 1);
 
     public IConnection RequireConnection()
@@ -24,6 +25,30 @@ internal sealed class RabbitMqRuntime
 
     public async Task ResetConnectionAsync()
     {
+        if (ConsumerChannel is not null)
+        {
+            try
+            {
+                if (ConsumerChannel.IsOpen)
+                    await ConsumerChannel.CloseAsync();
+            }
+            catch
+            {
+                // ignore
+            }
+
+            try
+            {
+                await ConsumerChannel.DisposeAsync();
+            }
+            catch
+            {
+                // ignore
+            }
+        }
+
+        ConsumerChannel = null;
+
         if (Connection is not null)
         {
             try
