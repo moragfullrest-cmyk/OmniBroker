@@ -35,7 +35,7 @@ public sealed class ConcurrentObjectPool<T> : IAsyncDisposable
                 {
                     try
                     {
-                        return await _objectGenerator(cancellationToken).ConfigureAwait(false);
+                        return (await _objectGenerator(cancellationToken).ConfigureAwait(false))!;
                     }
                     catch
                     {

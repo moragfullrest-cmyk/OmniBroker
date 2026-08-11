@@ -30,7 +30,7 @@ internal sealed class TopologyDeclarer
             await channel.QueueDeclareAsync(nameResolver.ResolveInboundName(type), false, false, false, null);
             IMessage prototype = (IMessage)(Activator.CreateInstance(type)
                 ?? throw new InvalidOperationException($"Unable to create instance of message type {type}."));
-            string[] routingKeys = prototype.GetAcceptableTags();
+            string[] routingKeys = prototype.GetAcceptableTags() ?? [""];
             foreach (string routingKey in routingKeys)
                 await channel.QueueBindAsync(nameResolver.ResolveInboundName(type), nameResolver.ResolveOutboundName(type), routingKey);
         }
@@ -46,7 +46,7 @@ internal sealed class TopologyDeclarer
         IChannel channel = await connection.CreateChannelAsync();
 
         var result = await channel.QueueDeclareAsync();
-        ((RabbitMQExtension)builder.Extension).ReplyQueueName = result.QueueName;
+        ((RabbitMQExtension)builder.Extension!).ReplyQueueName = result.QueueName;
         foreach (Type type in builder.RpcCallers.Keys)
         {
             await channel.ExchangeDeclareAsync(nameResolver.ResolveOutboundName(type), ExchangeType.Topic, true, false);

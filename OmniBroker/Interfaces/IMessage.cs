@@ -1,24 +1,25 @@
 namespace OmniBroker;
 
+
 public interface IMessage
 {
     /// <summary>
-    /// Routing keys для bind очереди. Переопределите на типе сообщения при необходимости.
+    /// Routing keys for queue binding. Override on the message type if needed.
     /// </summary>
     string[] GetAcceptableTags() => [""];
 
     /// <summary>
-    /// Тело сообщения
+    /// Message body
     /// </summary>
     public byte[] Body { get; set; }
 
     /// <summary>
-    /// Тэг конкретного сообщения
+    /// Tag of the specific message
     /// </summary>
     public string Tag { get; set; }
 
     /// <summary>
-    /// Ид корреляции сообщений
+    /// Message correlation id
     /// </summary>
     public string CorrelationId { get; set; }
 }

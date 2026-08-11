@@ -1,10 +1,8 @@
-using System.Linq.Expressions;
-using System.Reflection;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ.ServiceSetup;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -15,7 +13,6 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
     private readonly IServiceProvider _serviceProvider;
     private readonly IChannel _channel;
     private readonly Dictionary<string, HandlerWrapper> _handlers;
-    private readonly Dictionary<string, Func<IMessage>> _messageActivators = new Dictionary<string, Func<IMessage>>();
     private readonly ILogger<RabbitMQBasicConsumer> _logger;
     private readonly BrokerId _brokerId;
 
@@ -31,20 +28,6 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
         _handlers = _serviceProvider.GetKeyedServices<HandlerWrapper>(id).ToDictionary(_ => nameResolver.ResolveOutboundName(_.MessageType));
         _brokerId = id;
         _logger = logger;
-
-        foreach (KeyValuePair<string, HandlerWrapper> handler in _handlers)
-        {
-            ConstructorInfo? ctor = handler.Value.MessageType.GetConstructor([]);
-            if (ctor == null)
-            {
-                throw new MissingMethodException(handler.Value.MessageType.FullName, "Сообщение должно иметь конструктор без параметров");
-            }
-            NewExpression newExp = Expression.New(ctor);
-
-            var expr = Expression.Lambda<Func<IMessage>>(newExp);
-
-            _messageActivators.Add(handler.Key, expr.Compile());
-        }
     }
 
     public override async Task HandleBasicDeliverAsync(
@@ -71,17 +54,17 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
         using var scope = _serviceProvider.CreateScope();
         try
         {
-            IMessage message = _messageActivators[exchange]();
+            IMessage message = handler.CreateMessage();
             message.Body = body.ToArray();
             message.CorrelationId = properties.CorrelationId;
             bool result = true;
             foreach (Func<IServiceProvider, IMessage, MessageContext, Task<bool>> _delegate in handler.Handlers)
             {
                 result &= await _delegate(scope.ServiceProvider, message, new MessageContext
-                {
-                    CurrentBrokerId = _brokerId,
-                    ReplyInfo = new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo }
-                });
+                (
+                    CurrentBrokerId: _brokerId,
+                    ReplyInfo: new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo }
+                ));
             }
 
             if (result)

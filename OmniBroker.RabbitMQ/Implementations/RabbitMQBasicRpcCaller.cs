@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.DependencyInjection;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ.ServiceSetup;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace OmniBroker.RabbitMQ.Implementations;
 
@@ -39,11 +39,11 @@ internal sealed class RabbitMQBasicRpcCaller<TInputMessage, TOutputMessage> : IR
         try
         {
             var published = await _producer.Publish(input, new PublishOptions
-            {
-                CorrelationId = correlationId,
-                ReplyTo = ((RabbitMQExtension)_builder.Extension).ReplyQueueName,
-                Destination = _nameResolver.ResolveOutboundName(typeof(TInputMessage))
-            }, cancellationToken);
+            (
+                CorrelationId: correlationId,
+                ReplyTo: ((RabbitMQExtension)_builder.Extension!).ReplyQueueName,
+                Destination: _nameResolver.ResolveOutboundName(typeof(TInputMessage))
+            ), cancellationToken);
 
             if (!published)
             {

@@ -1,50 +1,50 @@
-using OmniBroker.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
+using OmniBroker.Infrastructure;
 
 namespace OmniBroker;
 
 /// <summary>
-/// Расширение транспорта брокера (инфраструктура, продюсеры, консьюмеры, RPC)
+/// Broker transport extension (infrastructure, producers, consumers, RPC)
 /// </summary>
 public interface IBrokerExtension
 {
     /// <summary>
-    /// Идентификатор экземпляра брокера
+    /// Broker instance identifier
     /// </summary>
     public BrokerId BrokerId { get; set; }
 
     /// <summary>
-    /// Поддерживает ли транспорт RPC-обмен
+    /// Whether the transport supports RPC
     /// </summary>
     bool SupportsRpc { get; }
 
     /// <summary>
-    /// Зарегистрировать инфраструктуру брокера в DI
+    /// Register broker infrastructure in DI
     /// </summary>
     Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder);
 
     /// <summary>
-    /// Зарегистрировать продюсеры в DI
+    /// Register producers in DI
     /// </summary>
     Task SetupProducers(IServiceCollection services, BrokerOptionsBuilder builder);
 
     /// <summary>
-    /// Зарегистрировать консьюмеры в DI
+    /// Register consumers in DI
     /// </summary>
     Task SetupConsumers(IServiceCollection services, BrokerOptionsBuilder builder);
 
     /// <summary>
-    /// Зарегистрировать RPC-компоненты в DI
+    /// Register RPC components in DI
     /// </summary>
     Task SetupRpc(IServiceCollection services, BrokerOptionsBuilder builder);
 
     /// <summary>
-    /// Запустить потребление сообщений
+    /// Start message consumption
     /// </summary>
     Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder);
 
     /// <summary>
-    /// Запустить инфраструктуру брокера
+    /// Start broker infrastructure
     /// </summary>
     Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder);
 }

@@ -1,24 +1,24 @@
 # OmniBroker
 
-Обобщённый брокер сообщений для .NET с единым API и провайдерами **RabbitMQ** и **Kafka**.
+A unified message broker for .NET with a single API and **RabbitMQ** and **Kafka** providers.
 
-## Структура решения
+## Solution structure
 
-| Проект | Назначение |
+| Project | Purpose |
 |--------|------------|
-| `OmniBroker` | Ядро: интерфейсы, инфраструктура, DI |
-| `OmniBroker.RabbitMQ` | Провайдер RabbitMQ |
-| `OmniBroker.Kafka` | Провайдер Kafka |
-| `OmniBroker.Example` | Пример использования |
+| `OmniBroker` | Core: interfaces, infrastructure, DI |
+| `OmniBroker.RabbitMQ` | RabbitMQ provider |
+| `OmniBroker.Kafka` | Kafka provider |
+| `OmniBroker.Example` | Usage example |
 
-## Быстрый старт
+## Quick start
 
 ```bash
 dotnet restore OmniBroker.slnx
 dotnet build OmniBroker.slnx
 ```
 
-Подключение в приложении:
+Wiring in an application:
 
 ```csharp
 using OmniBroker;

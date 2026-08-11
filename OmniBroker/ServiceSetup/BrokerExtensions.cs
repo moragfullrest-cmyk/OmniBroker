@@ -1,27 +1,27 @@
 using System.Linq.Expressions;
 using System.Reflection;
-using OmniBroker.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using OmniBroker.Infrastructure;
 
 namespace OmniBroker;
 
 public static class BrokerExtensions
 {
     /// <summary>
-    /// Запустить работу с брокерами
+    /// Start broker operations
     /// </summary>
     public static IHost UseBrokers(this IHost host)
         => UseBrokersAsync(host).GetAwaiter().GetResult();
 
     /// <summary>
-    /// Асинхронно запустить работу с брокерами
+    /// Start broker operations asynchronously
     /// </summary>
     public static async Task<IHost> UseBrokersAsync(this IHost host)
     {
-        foreach (var builder in host.Services.GetServices<BrokerOptionsBuilder>())
+        foreach (BrokerOptionsBuilder builder in host.Services.GetServices<BrokerOptionsBuilder>())
         {
-            await builder.Extension.StartInfrastructure(host.Services, builder);
+            await builder.Extension!.StartInfrastructure(host.Services, builder);
             await builder.Extension.StartConsumers(host.Services, builder);
         }
 
@@ -29,7 +29,7 @@ public static class BrokerExtensions
     }
 
     /// <summary>
-    /// Входной метод настройки брокера
+    /// Entry point for broker configuration
     /// </summary>
     public static IServiceCollection AddBroker(this IServiceCollection services, Action<BrokerOptionsBuilder> optionsAction)
     {
@@ -53,27 +53,28 @@ public static class BrokerExtensions
         options.Extension.SetupConsumers(services, options).GetAwaiter().GetResult();
         options.Extension.SetupRpc(services, options).GetAwaiter().GetResult();
 
+        // Required for startup — keep in the service list
         services.AddSingleton(options);
         services.AddKeyedSingleton(options.BrokerId, options);
         return services;
     }
 
     /// <summary>
-    /// Добавить продюсера для сообщения к этому брокеру
+    /// Add a producer for a message type to this broker
     /// </summary>
     public static BrokerOptionsBuilder AddProducerFor<TMessage>(this BrokerOptionsBuilder optionsBuilder) where TMessage : IMessage
     {
         Type inputType = typeof(TMessage);
         EnsureConcreteMessageType(inputType);
         if (optionsBuilder.Producables.Contains(inputType))
-            throw new ArgumentException($"Message of type {inputType} is already registered as producer");
+            throw new ArgumentException($"Message of type {inputType} is already registered for producing");
         EnsureNotInRpc(optionsBuilder, inputType);
         optionsBuilder.Producables.Add(inputType);
         return optionsBuilder;
     }
 
     /// <summary>
-    /// Добавить потребителя сообщения к этому брокеру. Возможно добавлять несколько потребителей
+    /// Add a message consumer to this broker. Multiple consumers may be registered
     /// </summary>
     public static BrokerOptionsBuilder AddConsumerFor<TMessage>(this BrokerOptionsBuilder optionsBuilder, Delegate action)
         where TMessage : IMessage
@@ -100,7 +101,7 @@ public static class BrokerExtensions
     }
 
     /// <summary>
-    /// Зарегистрировать RPC-вызывающую сторону для пары сообщений
+    /// Register an RPC caller for a message pair
     /// </summary>
     public static BrokerOptionsBuilder AddRpcCaller<TInputMessage, TOutputMessage>(this BrokerOptionsBuilder optionsBuilder)
         where TInputMessage : IMessage
@@ -131,7 +132,7 @@ public static class BrokerExtensions
     }
 
     /// <summary>
-    /// Зарегистрировать RPC-принимающую сторону с обработчиком запроса
+    /// Register an RPC receiver with a request handler
     /// </summary>
     public static BrokerOptionsBuilder AddRpcReceiver<TInputMessage, TOutputMessage>(this BrokerOptionsBuilder optionsBuilder, Delegate action)
         where TInputMessage : IMessage
@@ -220,17 +221,39 @@ public static class BrokerExtensions
                 return contextParamExp;
             }
 
-            MethodInfo method = typeof(ServiceProviderServiceExtensions)
-                    .GetMethod("GetService", BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider)])
+            // 1) soft keyed by CurrentBrokerId (broker infrastructure)
+            // 2) required keyed by [FromKeyedServices] if present
+            // 3) otherwise required unkeyed
+            MethodInfo getKeyedService = typeof(ServiceProviderKeyedServiceExtensions)
+                    .GetMethod(nameof(ServiceProviderKeyedServiceExtensions.GetKeyedService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider), typeof(object)])!
                     .MakeGenericMethod(_.ParameterType);
 
-            MethodInfo methodKeyed = typeof(ServiceProviderKeyedServiceExtensions)
-                    .GetMethod("GetRequiredKeyedService", BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider), typeof(object)])
-                    .MakeGenericMethod(_.ParameterType);
-            MethodCallExpression simpleCall = Expression.Call(method, provParamExp);
-            MethodCallExpression keyedCall = Expression.Call(methodKeyed, provParamExp, Expression.Property(contextParamExp, nameof(MessageContext.CurrentBrokerId)));
+            Expression softBrokerCall = Expression.Call(
+                getKeyedService,
+                provParamExp,
+                Expression.Property(contextParamExp, nameof(MessageContext.CurrentBrokerId)));
 
-            return Expression.Coalesce(simpleCall, keyedCall);
+            FromKeyedServicesAttribute? keyedAttr = _.GetCustomAttribute<FromKeyedServicesAttribute>();
+            Expression fallbackCall;
+            if (keyedAttr is not null)
+            {
+                MethodInfo getRequiredKeyed = typeof(ServiceProviderKeyedServiceExtensions)
+                        .GetMethod(nameof(ServiceProviderKeyedServiceExtensions.GetRequiredKeyedService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider), typeof(object)])!
+                        .MakeGenericMethod(_.ParameterType);
+                fallbackCall = Expression.Call(
+                    getRequiredKeyed,
+                    provParamExp,
+                    Expression.Constant(keyedAttr.Key, typeof(object)));
+            }
+            else
+            {
+                MethodInfo getRequired = typeof(ServiceProviderServiceExtensions)
+                        .GetMethod(nameof(ServiceProviderServiceExtensions.GetRequiredService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider)])!
+                        .MakeGenericMethod(_.ParameterType);
+                fallbackCall = Expression.Call(getRequired, provParamExp);
+            }
+
+            return Expression.Coalesce(softBrokerCall, fallbackCall);
         });
 
         Expression callExp;

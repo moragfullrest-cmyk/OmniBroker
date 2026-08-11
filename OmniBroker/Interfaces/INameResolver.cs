@@ -1,17 +1,17 @@
 namespace OmniBroker.Interfaces;
 
 /// <summary>
-/// Резолвер имён входящих и исходящих каналов сообщений
+/// Resolver for inbound and outbound message channel names
 /// </summary>
 public interface INameResolver
 {
     /// <summary>
-    /// Получить имя исходящего канала для типа сообщения
+    /// Get the outbound channel name for a message type
     /// </summary>
     string ResolveOutboundName(Type messageType);
 
     /// <summary>
-    /// Получить имя входящего канала для типа сообщения
+    /// Get the inbound channel name for a message type
     /// </summary>
     string ResolveInboundName(Type messageType);
 }

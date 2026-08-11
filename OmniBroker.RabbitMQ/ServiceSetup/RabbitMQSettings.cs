@@ -1,47 +1,47 @@
 namespace OmniBroker.RabbitMQ.ServiceSetup;
 
 /// <summary>
-/// Настройки подключения к RabbitMQ
+/// RabbitMQ connection settings
 /// </summary>
 public sealed class RabbitMQSettings
 {
     /// <summary>
-    /// Хост брокера
+    /// Broker host
     /// </summary>
     public required string HostName { get; init; }
 
     /// <summary>
-    /// Имя пользователя
+    /// User name
     /// </summary>
     public required string UserName { get; init; }
 
     /// <summary>
-    /// Пароль
+    /// Password
     /// </summary>
     public required string Password { get; init; }
 
     /// <summary>
-    /// Виртуальный хост
+    /// Virtual host
     /// </summary>
     public string VirtualHost { get; init; } = "/";
 
     /// <summary>
-    /// Порт подключения
+    /// Connection port
     /// </summary>
     public int Port { get; init; } = 5672;
 
     /// <summary>
-    /// Использовать TLS
+    /// Use TLS
     /// </summary>
     public bool UseTls { get; init; }
 
     /// <summary>
-    /// Таймаут ожидания RPC-ответа
+    /// RPC response wait timeout
     /// </summary>
     public TimeSpan RpcTimeout { get; init; } = TimeSpan.FromMinutes(1);
 
     /// <summary>
-    /// Максимальный размер пула каналов
+    /// Maximum channel pool size
     /// </summary>
     public int MaxChannelPoolSize { get; init; } = 32;
 }

@@ -3,47 +3,47 @@ using Confluent.Kafka;
 namespace OmniBroker.Kafka.ServiceSetup;
 
 /// <summary>
-/// Настройки подключения к Kafka
+/// Kafka connection settings
 /// </summary>
 public sealed class KafkaSettings
 {
     /// <summary>
-    /// Список bootstrap-серверов
+    /// Bootstrap servers list
     /// </summary>
     public required string Hosts { get; init; }
 
     /// <summary>
-    /// Идентификатор клиента
+    /// Client identifier
     /// </summary>
     public string? ClientId { get; init; }
 
     /// <summary>
-    /// Идентификатор consumer group
+    /// Consumer group identifier
     /// </summary>
     public string? GroupId { get; init; }
 
     /// <summary>
-    /// Стратегия сброса offset при отсутствии сохранённой позиции
+    /// Offset reset strategy when no stored position exists
     /// </summary>
     public AutoOffsetReset AutoOffsetReset { get; init; } = AutoOffsetReset.Earliest;
 
     /// <summary>
-    /// Протокол безопасности подключения
+    /// Connection security protocol
     /// </summary>
     public SecurityProtocol? SecurityProtocol { get; init; }
 
     /// <summary>
-    /// Имя пользователя SASL
+    /// SASL user name
     /// </summary>
     public string? SaslUsername { get; init; }
 
     /// <summary>
-    /// Пароль SASL
+    /// SASL password
     /// </summary>
     public string? SaslPassword { get; init; }
 
     /// <summary>
-    /// Механизм SASL
+    /// SASL mechanism
     /// </summary>
     public SaslMechanism? SaslMechanism { get; init; }
 }

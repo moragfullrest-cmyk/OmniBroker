@@ -1,10 +1,10 @@
 using Confluent.Kafka;
-using OmniBroker.Infrastructure;
-using OmniBroker.Interfaces;
-using OmniBroker.Kafka.Implementations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OmniBroker.Infrastructure;
+using OmniBroker.Interfaces;
+using OmniBroker.Kafka.Implementations;
 
 namespace OmniBroker.Kafka.ServiceSetup;
 
@@ -36,7 +36,10 @@ internal sealed class KafkaExtension(KafkaSettings settings) : IBrokerExtension
 
         foreach (KeyValuePair<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<bool>>>> handler in builder.Consumables)
         {
-            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper { MessageType = handler.Key, Handlers = handler.Value });
+            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper(
+                MessageType: handler.Key,
+                Handlers: handler.Value,
+                CreateMessage: HandlerWrapper.BuildCreateMessage(handler.Key)));
         }
 
         services.AddSingleton<IHostedService, KafkaConsumer>((s) => new KafkaConsumer(s, BrokerId, s.GetRequiredService<ILogger<KafkaConsumer>>(), s.GetRequiredKeyedService<INameResolver>(BrokerId)));
@@ -84,7 +87,7 @@ internal sealed class KafkaExtension(KafkaSettings settings) : IBrokerExtension
                     s.GetRequiredService(typeof(ILogger<>).MakeGenericType(producerType)),
                     s.GetRequiredKeyedService(typeof(IProducer<string, byte[]>), obj),
                     s.GetRequiredKeyedService<INameResolver>(obj)
-                    );
+                    )!;
             });
         }
 

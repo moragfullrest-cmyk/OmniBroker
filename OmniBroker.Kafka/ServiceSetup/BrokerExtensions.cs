@@ -5,10 +5,13 @@ namespace OmniBroker.Kafka.ServiceSetup;
 public static class BrokerExtensions
 {
     /// <summary>
-    /// Метод настройки подключения к Kafka
+    /// Configure Kafka connection
     /// </summary>
     public static BrokerOptionsBuilder UseKafka(this BrokerOptionsBuilder optionsBuilder, KafkaSettings settings)
     {
+        ArgumentNullException.ThrowIfNull(optionsBuilder);
+        ArgumentNullException.ThrowIfNull(settings);
+
         optionsBuilder.Extension = new KafkaExtension(settings);
         optionsBuilder.NameResolver ??= new KafkaNameResolver();
         return optionsBuilder;

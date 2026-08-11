@@ -1,12 +1,10 @@
-using System.Linq.Expressions;
-using System.Reflection;
 using System.Text;
 using Confluent.Kafka;
-using OmniBroker.Infrastructure;
-using OmniBroker.Interfaces;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OmniBroker.Infrastructure;
+using OmniBroker.Interfaces;
 
 namespace OmniBroker.Kafka.Implementations;
 
@@ -16,7 +14,6 @@ internal sealed class KafkaConsumer : BackgroundService
     private readonly Dictionary<string, HandlerWrapper> _handlers;
     private readonly IConsumer<string, byte[]> _consumer;
     private readonly ILogger _logger;
-    private readonly Dictionary<string, Func<IMessage>> _messageActivators = new Dictionary<string, Func<IMessage>>();
     private readonly BrokerId _brokerId;
 
     public KafkaConsumer(
@@ -30,20 +27,6 @@ internal sealed class KafkaConsumer : BackgroundService
         _consumer = _serviceProvider.GetRequiredKeyedService<IConsumer<string, byte[]>>(id);
         _logger = logger;
         _brokerId = id;
-
-        foreach (KeyValuePair<string, HandlerWrapper> handler in _handlers)
-        {
-            ConstructorInfo? ctor = handler.Value.MessageType.GetConstructor([]);
-            if (ctor == null)
-            {
-                throw new MissingMethodException(handler.Value.MessageType.FullName, "Сообщение должно иметь конструктор без параметров");
-            }
-            NewExpression newExp = Expression.New(ctor);
-
-            var expr = Expression.Lambda<Func<IMessage>>(newExp);
-
-            _messageActivators.Add(handler.Key, expr.Compile());
-        }
     }
 
     public override Task StartAsync(CancellationToken cancellationToken)
@@ -84,7 +67,7 @@ internal sealed class KafkaConsumer : BackgroundService
                 }
 
                 using var scope = _serviceProvider.CreateScope();
-                IMessage message = _messageActivators[receivedMessage.Topic]();
+                IMessage message = handler.CreateMessage();
                 message.Body = receivedMessage.Message.Value;
                 message.CorrelationId = ReadCorrelationId(receivedMessage.Message.Headers) ?? message.CorrelationId;
 
@@ -92,9 +75,10 @@ internal sealed class KafkaConsumer : BackgroundService
                 foreach (Func<IServiceProvider, IMessage, MessageContext, Task<bool>> handlerDelegate in handler.Handlers)
                 {
                     result &= await handlerDelegate(scope.ServiceProvider, message, new MessageContext
-                    {
-                        CurrentBrokerId = _brokerId
-                    });
+                    (
+                        CurrentBrokerId: _brokerId,
+                        null
+                    ));
                 }
 
                 if (!result)

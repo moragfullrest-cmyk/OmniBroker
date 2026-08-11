@@ -1,9 +1,9 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ.Implementations;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 
 namespace OmniBroker.RabbitMQ.ServiceSetup;
@@ -32,7 +32,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
             return runtime.RequireChannelPool();
         });
 
-        services.AddKeyedSingleton<INameResolver>(BrokerId, builder.NameResolver);
+        services.AddKeyedSingleton<INameResolver>(BrokerId, builder.NameResolver!);
 
         return Task.CompletedTask;
     }
@@ -41,7 +41,10 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
     {
         foreach (KeyValuePair<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<bool>>>> handler in builder.Consumables)
         {
-            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper { MessageType = handler.Key, Handlers = handler.Value });
+            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper(
+                MessageType: handler.Key,
+                Handlers: handler.Value,
+                CreateMessage: HandlerWrapper.BuildCreateMessage(handler.Key)));
         }
 
         return Task.CompletedTask;
@@ -55,7 +58,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
         {
             services.AddTransient(typeof(IRpcCaller<,>).MakeGenericType(t.Key, t.Value), (s) =>
             {
-                return Activator.CreateInstance(typeof(RabbitMQBasicRpcCaller<,>).MakeGenericType(t.Key, t.Value), s, builder.BrokerId);
+                return Activator.CreateInstance(typeof(RabbitMQBasicRpcCaller<,>).MakeGenericType(t.Key, t.Value), s, builder.BrokerId)!;
             });
             services.AddKeyedScoped(typeof(IProducer<>).MakeGenericType(t.Key), BrokerId, (s, obj) =>
             {
@@ -63,19 +66,20 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
                 return Activator.CreateInstance(producerType,
                     s.GetRequiredService(typeof(ILogger<>).MakeGenericType(producerType)),
                     s.GetRequiredKeyedService<ConcurrentObjectPool<IChannel>>(obj),
-                    s.GetRequiredKeyedService<INameResolver>(obj));
+                    s.GetRequiredKeyedService<INameResolver>(obj))!;
             });
 
             services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper
-            {
-                MessageType = t.Value,
-                Handlers =
+            (
+                MessageType: t.Value,
+                Handlers:
                 [
-                    OmniBroker.BrokerExtensions.WrapActionDelegate<bool>((Delegate )typeof(RabbitMQExtension).GetMethod(nameof(CreateCorrelationDelegate)
-                    , System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).MakeGenericMethod(t.Value)
-                    .Invoke(null, null))
-                ]
-            });
+                    OmniBroker.BrokerExtensions.WrapActionDelegate<bool>((Delegate)typeof(RabbitMQExtension).GetMethod(nameof(CreateCorrelationDelegate)
+                    , System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.MakeGenericMethod(t.Value)
+                    .Invoke(null, null)!)
+                ],
+                CreateMessage: HandlerWrapper.BuildCreateMessage(t.Value)
+            ));
             _replyTypes.Add(t.Value);
         }
 
@@ -83,22 +87,23 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
         {
             var returnType = t.Value.Method.ReturnType.GenericTypeArguments[0];
             services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper
-            {
-                MessageType = t.Key,
-                Handlers =
+            (
+                MessageType: t.Key,
+                Handlers:
                 [
-                    OmniBroker.BrokerExtensions.WrapActionDelegate<bool>((Delegate )typeof(RabbitMQExtension).GetMethod(nameof(CreateReplyDelegate)
-                    , System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic).MakeGenericMethod(returnType)
-                    .Invoke(null, new object[]{t.Value }))
-                ]
-            });
+                    OmniBroker.BrokerExtensions.WrapActionDelegate<bool>((Delegate)typeof(RabbitMQExtension).GetMethod(nameof(CreateReplyDelegate)
+                    , System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.MakeGenericMethod(returnType)
+                    .Invoke(null, [t.Value])!)
+                ],
+                CreateMessage: HandlerWrapper.BuildCreateMessage(t.Key)
+            ));
             services.AddKeyedScoped(typeof(IProducer<>).MakeGenericType(returnType), BrokerId, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(returnType);
                 return Activator.CreateInstance(producerType,
                     s.GetRequiredService(typeof(ILogger<>).MakeGenericType(producerType)),
                     s.GetRequiredKeyedService<ConcurrentObjectPool<IChannel>>(obj),
-                    s.GetRequiredKeyedService<INameResolver>(obj));
+                    s.GetRequiredKeyedService<INameResolver>(obj))!;
             });
         }
 
@@ -110,6 +115,9 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
     {
         return (operations, message) =>
         {
+            if (string.IsNullOrEmpty(message.CorrelationId))
+                return Task.FromResult(false);
+
             if (operations.TryRemove(message.CorrelationId, out TaskCompletionSource<IMessage>? tcs))
             {
                 tcs.TrySetResult(message);
@@ -125,6 +133,9 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
         return async (IServiceProvider provider, IMessage message, MessageContext context) =>
         {
             TOutput result = await handler(provider, message, context);
+            if (result is null)
+                throw new InvalidOperationException("RPC reply message must not be null.");
+
             var producer = provider.GetRequiredKeyedService<IProducer<TOutput>>(context.CurrentBrokerId);
             var builder = provider.GetRequiredKeyedService<BrokerOptionsBuilder>(context.CurrentBrokerId);
             if (context.ReplyInfo is not RabbitMQReplyInfo replyInfo
@@ -134,10 +145,11 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
             }
             result.Tag = replyInfo.ReplyTo;
             return await producer.Publish(result, new PublishOptions
-            {
-                CorrelationId = message.CorrelationId,
-                Destination = builder.NameResolver.ResolveOutboundName(typeof(TOutput))
-            });
+            (
+                CorrelationId: message.CorrelationId,
+                Destination: builder.NameResolver!.ResolveOutboundName(typeof(TOutput)),
+                ReplyTo: null
+            ));
         };
     }
 
@@ -155,7 +167,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
                 return Activator.CreateInstance(producerType,
                     s.GetRequiredService(typeof(ILogger<>).MakeGenericType(producerType)),
                     s.GetRequiredKeyedService<ConcurrentObjectPool<IChannel>>(obj),
-                    s.GetRequiredKeyedService<INameResolver>(obj));
+                    s.GetRequiredKeyedService<INameResolver>(obj))!;
             });
         }
 
@@ -254,7 +266,6 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
             channel,
             builder.BrokerId,
             services.GetRequiredService<ILogger<RabbitMQBasicConsumer>>());
-        BrokerOptionsBuilder optionsBuilder = services.GetServices<BrokerOptionsBuilder>().First(_ => _.BrokerId == BrokerId);
 
         bool replyQueueConsumed = false;
         foreach (HandlerWrapper handler in handlers)
@@ -284,7 +295,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
         if (builder.RpcCallers.Count > 0 && !replyQueueConsumed)
         {
             await channel.BasicConsumeAsync(
-                queue: ((RabbitMQExtension)optionsBuilder.Extension).ReplyQueueName,
+                queue: ReplyQueueName,
                 autoAck: false,
                 consumer: consumer,
                 CancellationToken.None);

@@ -4,7 +4,7 @@ using OmniBroker.Interfaces;
 namespace OmniBroker;
 
 /// <summary>
-/// Построитель параметров настройки брокера
+/// Broker configuration options builder
 /// </summary>
 public sealed class BrokerOptionsBuilder
 {
@@ -15,12 +15,12 @@ public sealed class BrokerOptionsBuilder
     internal IBrokerExtension Extension { get; set; }
 
     /// <summary>
-    /// Имя потребляющей стороны брокера
+    /// Consuming side name for the broker
     /// </summary>
     public string SetupName { get; set; } = Guid.NewGuid().ToString();
 
     /// <summary>
-    /// Резолвер имён топиков/очередей
+    /// Topic/queue name resolver
     /// </summary>
     public INameResolver? NameResolver { get; set; }
 

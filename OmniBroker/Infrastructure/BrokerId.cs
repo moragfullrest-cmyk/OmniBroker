@@ -1,12 +1,12 @@
 namespace OmniBroker.Infrastructure;
 
 /// <summary>
-/// Идентификатор экземпляра брокера в DI
+/// Broker instance identifier in DI
 /// </summary>
-public sealed record BrokerId
+public sealed record BrokerId()
 {
     /// <summary>
-    /// Уникальный идентификатор
+    /// Unique identifier
     /// </summary>
     public Guid Id { get; init; } = Guid.NewGuid();
 }

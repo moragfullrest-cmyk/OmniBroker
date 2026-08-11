@@ -1,8 +1,8 @@
 using System.Text;
 using Confluent.Kafka;
+using Microsoft.Extensions.Logging;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
-using Microsoft.Extensions.Logging;
 
 namespace OmniBroker.Kafka.Implementations;
 
@@ -14,6 +14,8 @@ internal sealed class KafkaProducer<TMessage>(
 {
     public async Task<bool> Publish(TMessage message, PublishOptions? options = null, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(message);
+
         try
         {
             string topicName = options?.Destination ?? nameResolver.ResolveOutboundName(typeof(TMessage));

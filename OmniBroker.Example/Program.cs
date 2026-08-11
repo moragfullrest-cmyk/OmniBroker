@@ -1,10 +1,10 @@
 using System.Text;
+using Microsoft.AspNetCore.Mvc;
 using OmniBroker;
 using OmniBroker.Interfaces;
 using OmniBroker.Kafka.ServiceSetup;
 using OmniBroker.RabbitMQ;
 using OmniBroker.RabbitMQ.ServiceSetup;
-using Microsoft.AspNetCore.Mvc;
 
 var builder = WebApplication.CreateBuilder(args);
 

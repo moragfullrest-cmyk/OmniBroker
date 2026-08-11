@@ -1,7 +1,7 @@
 namespace OmniBroker.Interfaces;
 
 /// <summary>
-/// Метаданные ответа для RPC-обмена
+/// Reply metadata for RPC exchange
 /// </summary>
 public interface IReplyInfo
 {
