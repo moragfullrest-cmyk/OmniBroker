@@ -112,9 +112,51 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
 
     public override async Task HandleChannelShutdownAsync(object channel, ShutdownEventArgs reason)
     {
-        BrokerOptionsBuilder builder = _serviceProvider.GetServices<BrokerOptionsBuilder>().First(_ => _.BrokerId == _brokerId);
-        var extension = (RabbitMQExtension)builder.Extension;
-        await extension.RecoverAsync(_serviceProvider, builder);
-        await base.HandleChannelShutdownAsync(channel, reason);
+        _logger.LogWarning(
+            "RabbitMQ consumer channel shutdown: ReplyCode={ReplyCode}, ReplyText={ReplyText}, Initiator={Initiator}",
+            reason.ReplyCode,
+            reason.ReplyText,
+            reason.Initiator);
+
+        try
+        {
+            RabbitMqRuntime runtime = _serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(_brokerId);
+
+            if (runtime.SuppressConsumerShutdownRecover)
+            {
+                _logger.LogDebug("Skipping recover: consumer shutdown suppressed during connection reset.");
+                return;
+            }
+
+            if (!ReferenceEquals(runtime.ConsumerChannel, _channel))
+            {
+                _logger.LogDebug("Skipping recover: shutdown is for a stale consumer channel.");
+                return;
+            }
+
+            BrokerOptionsBuilder? builder = _serviceProvider
+                .GetServices<BrokerOptionsBuilder>()
+                .FirstOrDefault(b => b.BrokerId == _brokerId);
+
+            if (builder is null)
+            {
+                _logger.LogError("Cannot recover RabbitMQ: BrokerOptionsBuilder for {BrokerId} was not found.", _brokerId.Id);
+                return;
+            }
+
+            if (builder.Extension is not RabbitMQExtension extension)
+            {
+                _logger.LogError(
+                    "Cannot recover RabbitMQ: unexpected extension type {ExtensionType}.",
+                    builder.Extension?.GetType().FullName);
+                return;
+            }
+
+            await extension.RecoverAsync(_serviceProvider, builder);
+        }
+        finally
+        {
+            await base.HandleChannelShutdownAsync(channel, reason);
+        }
     }
 }

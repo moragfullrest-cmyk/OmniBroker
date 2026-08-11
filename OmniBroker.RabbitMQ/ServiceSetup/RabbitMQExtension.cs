@@ -206,6 +206,11 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
         await runtime.ReconnectLock.WaitAsync();
         try
         {
+            if (runtime.Connection is { IsOpen: true } && runtime.ConsumerChannel is { IsOpen: true })
+            {
+                return;
+            }
+
             CancelPendingRpc(serviceProvider);
             await runtime.ResetConnectionAsync();
             await StartInfrastructure(serviceProvider, builder);
@@ -213,6 +218,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExte
         }
         finally
         {
+            runtime.SuppressConsumerShutdownRecover = false;
             runtime.ReconnectLock.Release();
         }
     }

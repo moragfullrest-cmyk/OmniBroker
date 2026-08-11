@@ -9,6 +9,12 @@ internal sealed class RabbitMqRuntime
     public IChannel? ConsumerChannel { get; set; }
     public SemaphoreSlim ReconnectLock { get; } = new(1, 1);
 
+    /// <summary>
+    /// When true, consumer channel shutdown callbacks must not trigger recover
+    /// (intentional close during reset).
+    /// </summary>
+    public bool SuppressConsumerShutdownRecover { get; set; }
+
     public IConnection RequireConnection()
     {
         return Connection
@@ -25,6 +31,8 @@ internal sealed class RabbitMqRuntime
 
     public async Task ResetConnectionAsync()
     {
+        SuppressConsumerShutdownRecover = true;
+
         if (ConsumerChannel is not null)
         {
             try
