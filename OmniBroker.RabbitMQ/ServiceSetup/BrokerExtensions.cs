@@ -13,7 +13,7 @@ public static class BrokerExtensions
         ArgumentNullException.ThrowIfNull(optionsBuilder);
         ArgumentNullException.ThrowIfNull(settings);
 
-        optionsBuilder.Extension = new RabbitMQExtension(settings);
+        optionsBuilder.Extension = new RabbitMQExtension(settings, optionsBuilder.BrokerId);
         optionsBuilder.NameResolver ??= new RabbitMQNameResolver(optionsBuilder.SetupName);
         return optionsBuilder;
     }

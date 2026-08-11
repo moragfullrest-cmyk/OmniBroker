@@ -40,8 +40,6 @@ public static class BrokerExtensions
 
         ArgumentNullException.ThrowIfNull(options.Extension);
 
-        options.Extension.BrokerId = options.BrokerId;
-
         if ((options.RpcCallers.Count > 0 || options.RpcReceivers.Count > 0) && !options.Extension.SupportsRpc)
         {
             throw new ArgumentException(

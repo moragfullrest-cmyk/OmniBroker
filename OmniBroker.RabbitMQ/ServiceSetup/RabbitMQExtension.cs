@@ -8,10 +8,10 @@ using RabbitMQ.Client;
 
 namespace OmniBroker.RabbitMQ.ServiceSetup;
 
-internal sealed class RabbitMQExtension(RabbitMQSettings settings) : IBrokerExtension
+internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brokerId) : IBrokerExtension
 {
     private readonly HashSet<Type> _replyTypes = [];
-    public BrokerId BrokerId { get; set; }
+    public BrokerId BrokerId { get; } = brokerId;
     public string ReplyQueueName { get; set; } = null!;
     public bool SupportsRpc => true;
 

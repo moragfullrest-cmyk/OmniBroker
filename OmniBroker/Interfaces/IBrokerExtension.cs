@@ -11,7 +11,7 @@ public interface IBrokerExtension
     /// <summary>
     /// Broker instance identifier
     /// </summary>
-    public BrokerId BrokerId { get; set; }
+    BrokerId BrokerId { get; }
 
     /// <summary>
     /// Whether the transport supports RPC
