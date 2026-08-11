@@ -15,4 +15,8 @@
     <ProjectReference Include="..\OmniBroker\OmniBroker.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OmniBroker.Tests.Unit" />
+  </ItemGroup>
+
 </Project>

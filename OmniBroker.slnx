@@ -3,4 +3,5 @@
   <Project Path="OmniBroker.Kafka/OmniBroker.Kafka.csproj" Id="c741ece9-f215-4517-9c79-37fb05c2281f" />
   <Project Path="OmniBroker.RabbitMQ/OmniBroker.RabbitMQ.csproj" />
   <Project Path="OmniBroker/OmniBroker.csproj" />
+  <Project Path="OmniBroker.Tests.Unit/OmniBroker.Tests.Unit.csproj" />
 </Solution>

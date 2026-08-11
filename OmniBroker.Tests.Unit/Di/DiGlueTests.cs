@@ -1,0 +1,189 @@
+using Microsoft.Extensions.DependencyInjection;
+using Moq;
+using OmniBroker.Kafka.Implementations;
+using OmniBroker.Kafka.ServiceSetup;
+using OmniBroker.RabbitMQ;
+using OmniBroker.RabbitMQ.Implementations;
+using OmniBroker.RabbitMQ.ServiceSetup;
+using OmniBroker.Tests.Unit.Fixtures;
+using RabbitMQ.Client;
+using Shouldly;
+
+namespace OmniBroker.Tests.Unit.Di;
+
+public sealed class DiGlueTests
+{
+    private static void SetupChannelLifecycle(Mock<IChannel> channel)
+    {
+        channel.Setup(c => c.CloseAsync(It.IsAny<ushort>(), It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        channel.Setup(c => c.DisposeAsync()).Returns(ValueTask.CompletedTask);
+    }
+
+    private static Mock<IConnection> ConnectionWithChannel(Mock<IChannel> channel)
+    {
+        var connection = new Mock<IConnection>();
+        connection.Setup(c => c.CreateChannelAsync(It.IsAny<CreateChannelOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(channel.Object);
+        return connection;
+    }
+
+    [Fact]
+    public void UseRabbitMq_sets_extension_and_default_resolver()
+    {
+        var builder = new BrokerOptionsBuilder { SetupName = "prefix" };
+
+        builder.UseRabbitMq(new RabbitMQSettings
+        {
+            HostName = "localhost",
+            UserName = "guest",
+            Password = "guest"
+        });
+
+        builder.Extension.ShouldBeOfType<RabbitMQExtension>();
+        builder.NameResolver.ShouldBeOfType<RabbitMQNameResolver>();
+        builder.NameResolver!.ResolveInboundName(typeof(TestMessage)).ShouldBe("prefix_TestMessage");
+    }
+
+    [Fact]
+    public void UseKafka_sets_extension_and_default_resolver()
+    {
+        var builder = new BrokerOptionsBuilder();
+
+        builder.UseKafka(new KafkaSettings { Hosts = "localhost:9092" });
+
+        builder.Extension.ShouldBeOfType<KafkaExtension>();
+        builder.NameResolver.ShouldBeOfType<KafkaNameResolver>();
+    }
+
+    [Fact]
+    public async Task Kafka_SetupInfrastructure_without_NameResolver_throws()
+    {
+        var builder = new BrokerOptionsBuilder();
+        builder.UseKafka(new KafkaSettings { Hosts = "localhost:9092" });
+        builder.NameResolver = null;
+        var extension = (KafkaExtension)builder.Extension!;
+
+        await Should.ThrowAsync<ArgumentNullException>(() =>
+            extension.SetupInfrastructure(new ServiceCollection(), builder));
+    }
+
+    [Fact]
+    public void RabbitMqRuntime_Require_before_start_throws()
+    {
+        var runtime = new RabbitMqRuntime();
+
+        Should.Throw<InvalidOperationException>(() => runtime.RequireConnection());
+        Should.Throw<InvalidOperationException>(() => runtime.RequireChannelPool());
+    }
+
+    [Fact]
+    public void RabbitMqRuntime_Require_after_start_returns_values()
+    {
+        var connection = Mock.Of<IConnection>();
+        var pool = new ConcurrentObjectPool<IChannel>(_ => Task.FromResult(Mock.Of<IChannel>()), maxSize: 1);
+        var runtime = new RabbitMqRuntime
+        {
+            Connection = connection,
+            ChannelPool = pool
+        };
+
+        runtime.RequireConnection().ShouldBeSameAs(connection);
+        runtime.RequireChannelPool().ShouldBeSameAs(pool);
+    }
+
+    [Fact]
+    public async Task TopologyDeclarer_EnsureProducersDeclared_declares_exchanges()
+    {
+        var channel = new Mock<IChannel>();
+        SetupChannelLifecycle(channel);
+        channel.Setup(c => c.ExchangeDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        Mock<IConnection> connection = ConnectionWithChannel(channel);
+        var builder = new BrokerOptionsBuilder();
+        builder.UseRabbitMq(new RabbitMQSettings
+        {
+            HostName = "localhost",
+            UserName = "guest",
+            Password = "guest"
+        });
+        builder.AddProducerFor<TestMessage>();
+        var resolver = new RabbitMQNameResolver(builder.SetupName);
+
+        await TopologyDeclarer.EnsureProducersDeclared(connection.Object, resolver, builder);
+
+        channel.Verify(c => c.ExchangeDeclareAsync(
+            nameof(TestMessage),
+            ExchangeType.Topic,
+            true,
+            false,
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task TopologyDeclarer_EnsureConsumersDeclared_declares_queue_and_bind()
+    {
+        var channel = new Mock<IChannel>();
+        SetupChannelLifecycle(channel);
+        channel.Setup(c => c.QueueDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QueueDeclareOk("q", 0, 0));
+        channel.Setup(c => c.QueueBindAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        Mock<IConnection> connection = ConnectionWithChannel(channel);
+        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        builder.UseRabbitMq(new RabbitMQSettings
+        {
+            HostName = "localhost",
+            UserName = "guest",
+            Password = "guest"
+        });
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        var resolver = new RabbitMQNameResolver(builder.SetupName);
+
+        await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder);
+
+        channel.Verify(c => c.QueueDeclareAsync(
+            "svc_TestMessage",
+            false,
+            false,
+            false,
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+        channel.Verify(c => c.QueueBindAsync(
+            "svc_TestMessage",
+            nameof(TestMessage),
+            "",
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+}

@@ -34,7 +34,18 @@ internal sealed class KafkaProducer<TMessage>(
                 };
             }
 
-            await producer.ProduceAsync(topicName, kafkaMessage, cancellationToken);
+            DeliveryResult<string, byte[]> deliveryResult =
+                await producer.ProduceAsync(topicName, kafkaMessage, cancellationToken);
+
+            if (deliveryResult.Status == PersistenceStatus.NotPersisted)
+            {
+                logger.LogWarning(
+                    "Delivery failed: message was not persisted to {Topic}. Status: {Status}",
+                    deliveryResult.Topic,
+                    deliveryResult.Status);
+                return false;
+            }
+
             return true;
         }
         catch (ProduceException<string, byte[]> e)

@@ -1,6 +1,5 @@
 namespace OmniBroker;
 
-
 public interface IMessage
 {
     /// <summary>

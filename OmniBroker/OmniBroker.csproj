@@ -17,6 +17,7 @@
 	<ItemGroup>
 		<InternalsVisibleTo Include="OmniBroker.RabbitMQ" />
     <InternalsVisibleTo Include="OmniBroker.Kafka" />
+    <InternalsVisibleTo Include="OmniBroker.Tests.Unit" />
 	</ItemGroup>
 
 </Project>
