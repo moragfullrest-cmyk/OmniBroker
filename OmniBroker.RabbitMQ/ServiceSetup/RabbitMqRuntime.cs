@@ -57,6 +57,11 @@ internal sealed class RabbitMqRuntime
 
         ConsumerChannel = null;
 
+        if (ChannelPool is not null)
+        {
+            await ChannelPool.ClearAsync();
+        }
+
         if (Connection is not null)
         {
             try
@@ -79,12 +84,5 @@ internal sealed class RabbitMqRuntime
         }
 
         Connection = null;
-
-        if (ChannelPool is not null)
-        {
-            await ChannelPool.DisposeAsync();
-        }
-
-        ChannelPool = null;
     }
 }

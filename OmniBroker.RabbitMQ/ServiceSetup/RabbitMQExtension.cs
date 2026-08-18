@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ.Implementations;
@@ -20,7 +21,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
         services.AddKeyedSingleton(BrokerId, settings);
         services.AddKeyedSingleton(BrokerId, new RabbitMqRuntime());
 
-        services.AddKeyedSingleton(BrokerId, (s, _) =>
+        services.AddKeyedTransient<IConnection>(BrokerId, (s, _) =>
         {
             RabbitMqRuntime runtime = s.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
             return runtime.RequireConnection();
@@ -198,18 +199,21 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
                 };
             }
 
-            IConnection connection = await factory.CreateConnectionAsync();
-            runtime.Connection = connection;
+            runtime.Connection = await factory.CreateConnectionAsync();
+        }
 
+        if (runtime.ChannelPool is null)
+        {
             runtime.ChannelPool = new ConcurrentObjectPool<IChannel>(
-                ct => connection.CreateChannelAsync(cancellationToken: ct),
+                ct => runtime.RequireConnection().CreateChannelAsync(cancellationToken: ct),
                 settings.MaxChannelPoolSize);
         }
 
         INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerId);
-        await TopologyDeclarer.EnsureProducersDeclared(runtime.Connection, nameResolver, builder);
-        await TopologyDeclarer.EnsureConsumersDeclared(runtime.Connection, nameResolver, builder);
-        await TopologyDeclarer.EnsureRpcDeclared(runtime.Connection, nameResolver, builder);
+        IConnection connection = runtime.RequireConnection();
+        await TopologyDeclarer.EnsureProducersDeclared(connection, nameResolver, builder);
+        await TopologyDeclarer.EnsureConsumersDeclared(connection, nameResolver, builder);
+        await TopologyDeclarer.EnsureRpcDeclared(connection, nameResolver, builder);
     }
 
     internal async Task RecoverAsync(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
@@ -225,7 +229,34 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
 
             CancelPendingRpc(serviceProvider);
             await runtime.ResetConnectionAsync();
-            await StartInfrastructure(serviceProvider, builder);
+
+            ILogger logger = serviceProvider.GetService<ILogger<RabbitMQExtension>>()
+                ?? NullLogger<RabbitMQExtension>.Instance;
+            int delaySeconds = 1;
+            const int capSeconds = 30;
+            while (true)
+            {
+                try
+                {
+                    await StartInfrastructure(serviceProvider, builder);
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(
+                        ex,
+                        "RabbitMQ recover failed to start infrastructure; retrying in {DelaySeconds}s",
+                        delaySeconds);
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                    delaySeconds = delaySeconds switch
+                    {
+                        1 => 5,
+                        5 => 15,
+                        _ => capSeconds
+                    };
+                }
+            }
+
             await StartConsumers(serviceProvider, builder);
         }
         finally

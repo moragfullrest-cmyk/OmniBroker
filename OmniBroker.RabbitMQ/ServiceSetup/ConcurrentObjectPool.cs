@@ -78,6 +78,25 @@ public sealed class ConcurrentObjectPool<T> : IAsyncDisposable
             _signal.Release();
     }
 
+    /// <summary>
+    /// Dispose idle items currently in the bag without disposing the pool.
+    /// In-flight items are left to the caller (<see cref="Return"/> or <see cref="DiscardAsync"/>).
+    /// Frees a slot for each drained item so a new one can be created; does not reset
+    /// the created count (checked-out items still occupy slots).
+    /// </summary>
+    public async ValueTask ClearAsync()
+    {
+        int drained = 0;
+        while (_objects.TryTake(out T? item))
+        {
+            await DisposeItemAsync(item).ConfigureAwait(false);
+            drained++;
+        }
+
+        if (drained > 0)
+            Interlocked.Add(ref _created, -drained);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)

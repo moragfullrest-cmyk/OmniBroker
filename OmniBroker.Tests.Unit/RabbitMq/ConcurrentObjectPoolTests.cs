@@ -118,4 +118,71 @@ public sealed class ConcurrentObjectPoolTests
 
         Should.Throw<ArgumentNullException>(() => pool.Return(null!));
     }
+
+    [Fact]
+    public async Task ClearAsync_disposes_idle_items_and_pool_still_creates()
+    {
+        int created = 0;
+        await using var pool = new ConcurrentObjectPool<PoolItem>(
+            _ =>
+            {
+                Interlocked.Increment(ref created);
+                return Task.FromResult(new PoolItem());
+            },
+            maxSize: 2);
+
+        PoolItem idle = await pool.GetAsync();
+        pool.Return(idle);
+
+        await pool.ClearAsync();
+
+        idle.Disposed.ShouldBeTrue();
+        PoolItem next = await pool.GetAsync();
+        next.ShouldNotBeSameAs(idle);
+        next.Disposed.ShouldBeFalse();
+        created.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task ClearAsync_does_not_dispose_checked_out_item_and_created_allows_Get_after_Discard()
+    {
+        int created = 0;
+        await using var pool = new ConcurrentObjectPool<PoolItem>(
+            _ =>
+            {
+                Interlocked.Increment(ref created);
+                return Task.FromResult(new PoolItem());
+            },
+            maxSize: 1);
+
+        PoolItem held = await pool.GetAsync();
+        await pool.ClearAsync();
+
+        held.Disposed.ShouldBeFalse();
+        created.ShouldBe(1);
+
+        await pool.DiscardAsync(held);
+        PoolItem next = await pool.GetAsync();
+
+        held.Disposed.ShouldBeTrue();
+        next.ShouldNotBeSameAs(held);
+        created.ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task ClearAsync_does_not_make_subsequent_Get_throw_ObjectDisposedException()
+    {
+        await using var pool = new ConcurrentObjectPool<PoolItem>(
+            _ => Task.FromResult(new PoolItem()),
+            maxSize: 1);
+
+        PoolItem idle = await pool.GetAsync();
+        pool.Return(idle);
+        await pool.ClearAsync();
+
+        PoolItem next = await pool.GetAsync();
+
+        next.ShouldNotBeNull();
+        next.Disposed.ShouldBeFalse();
+    }
 }
