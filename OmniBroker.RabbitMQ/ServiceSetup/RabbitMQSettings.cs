@@ -54,4 +54,11 @@ public sealed class RabbitMQSettings
     /// Optional dead-letter exchange. When set, consumer and RPC receive queues use x-dead-letter-exchange; handler failures are nacked without requeue.
     /// </summary>
     public string? DeadLetterExchange { get; init; }
+
+    /// <summary>
+    /// When true, consumable and RPC receive queues are declared durable. Default is true.
+    /// Existing non-durable queues with the same name will fail with PRECONDITION_FAILED.
+    /// Server-named exclusive auto-delete RPC reply queues are not durable.
+    /// </summary>
+    public bool DurableQueues { get; init; } = true;
 }

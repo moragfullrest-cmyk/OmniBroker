@@ -141,6 +141,16 @@ public sealed class DiGlueTests
     {
         var channel = new Mock<IChannel>();
         SetupChannelLifecycle(channel);
+        channel.Setup(c => c.ExchangeDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
         channel.Setup(c => c.QueueDeclareAsync(
                 It.IsAny<string>(),
                 It.IsAny<bool>(),
@@ -173,9 +183,18 @@ public sealed class DiGlueTests
 
         await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder);
 
+        channel.Verify(c => c.ExchangeDeclareAsync(
+            nameof(TestMessage),
+            ExchangeType.Topic,
+            true,
+            false,
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once);
         channel.Verify(c => c.QueueDeclareAsync(
             "svc_TestMessage",
-            false,
+            true,
             false,
             false,
             It.IsAny<IDictionary<string, object?>>(),
@@ -189,6 +208,108 @@ public sealed class DiGlueTests
             It.IsAny<IDictionary<string, object?>>(),
             It.IsAny<bool>(),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task TopologyDeclarer_EnsureConsumersDeclared_durable_queues_false_declares_non_durable_queue()
+    {
+        var channel = new Mock<IChannel>();
+        SetupChannelLifecycle(channel);
+        channel.Setup(c => c.ExchangeDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        channel.Setup(c => c.QueueDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QueueDeclareOk("q", 0, 0));
+        channel.Setup(c => c.QueueBindAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        Mock<IConnection> connection = ConnectionWithChannel(channel);
+        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        builder.UseRabbitMq(new RabbitMQSettings
+        {
+            HostName = "localhost",
+            UserName = "guest",
+            Password = "guest",
+            DurableQueues = false
+        });
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        var resolver = new RabbitMQNameResolver(builder.SetupName);
+
+        await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder, durableQueues: false);
+
+        channel.Verify(c => c.QueueDeclareAsync(
+            "svc_TestMessage",
+            false,
+            false,
+            false,
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task TopologyDeclarer_EnsureConsumersDeclared_disposes_channel_when_queue_declare_throws()
+    {
+        var channel = new Mock<IChannel>();
+        SetupChannelLifecycle(channel);
+        channel.Setup(c => c.ExchangeDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        channel.Setup(c => c.QueueDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("declare failed"));
+
+        Mock<IConnection> connection = ConnectionWithChannel(channel);
+        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        builder.UseRabbitMq(new RabbitMQSettings
+        {
+            HostName = "localhost",
+            UserName = "guest",
+            Password = "guest"
+        });
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        var resolver = new RabbitMQNameResolver(builder.SetupName);
+
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder));
+
+        channel.Verify(c => c.DisposeAsync(), Times.Once);
     }
 
     [Fact]
@@ -266,13 +387,22 @@ public sealed class DiGlueTests
             It.IsAny<CancellationToken>()), Times.Once);
         channel.Verify(c => c.QueueDeclareAsync(
             "svc_TestMessage",
-            false,
+            true,
             false,
             false,
             It.Is<IDictionary<string, object?>>(args =>
                 args != null
                 && args.ContainsKey("x-dead-letter-exchange")
                 && Equals(args["x-dead-letter-exchange"], "dlx")),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+        channel.Verify(c => c.ExchangeDeclareAsync(
+            nameof(TestMessage),
+            ExchangeType.Topic,
+            true,
+            false,
+            It.IsAny<IDictionary<string, object?>>(),
             It.IsAny<bool>(),
             It.IsAny<bool>(),
             It.IsAny<CancellationToken>()), Times.Once);
@@ -347,7 +477,7 @@ public sealed class DiGlueTests
             It.IsAny<CancellationToken>()), Times.Once);
         channel.Verify(c => c.QueueDeclareAsync(
             "svc_TestMessage",
-            false,
+            true,
             false,
             false,
             It.Is<IDictionary<string, object?>>(args =>
@@ -360,6 +490,15 @@ public sealed class DiGlueTests
         channel.Verify(c => c.ExchangeDeclareAsync(
             "dlx",
             ExchangeType.Fanout,
+            true,
+            false,
+            It.IsAny<IDictionary<string, object?>>(),
+            It.IsAny<bool>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+        channel.Verify(c => c.ExchangeDeclareAsync(
+            nameof(TestMessage),
+            ExchangeType.Topic,
             true,
             false,
             It.IsAny<IDictionary<string, object?>>(),

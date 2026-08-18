@@ -216,10 +216,14 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
         INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerId);
         IConnection connection = runtime.RequireConnection();
         await TopologyDeclarer.EnsureProducersDeclared(connection, nameResolver, builder);
-        await TopologyDeclarer.EnsureConsumersDeclared(connection, nameResolver, builder, settings.DeadLetterExchange);
-        await TopologyDeclarer.EnsureRpcDeclared(connection, nameResolver, builder, settings.DeadLetterExchange);
+        await TopologyDeclarer.EnsureConsumersDeclared(connection, nameResolver, builder, settings.DeadLetterExchange, settings.DurableQueues);
+        await TopologyDeclarer.EnsureRpcDeclared(connection, nameResolver, builder, settings.DeadLetterExchange, settings.DurableQueues);
     }
 
+    /// <summary>
+    /// Reconnects and redeclares topology. The exclusive server-named RPC reply queue is renamed on recover;
+    /// in-flight RPC calls are cancelled via <see cref="CancelPendingRpc"/>.
+    /// </summary>
     internal async Task RecoverAsync(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     {
         RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);

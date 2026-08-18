@@ -18,6 +18,12 @@ dotnet restore OmniBroker.slnx
 dotnet build OmniBroker.slnx
 ```
 
+RabbitMQ topology notes:
+
+- Consumer-only apps declare the outbound topic exchange before binding, so they do not wait for a producer.
+- `DurableQueues` (default true) makes consumable and RPC receive queues durable. Existing non-durable queues with the same name fail with PRECONDITION_FAILED.
+- After connection recover, the exclusive RPC reply queue is renamed; pending RPC calls are cancelled.
+
 Wiring in an application:
 
 ```csharp
