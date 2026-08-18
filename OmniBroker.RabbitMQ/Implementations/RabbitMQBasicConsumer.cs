@@ -15,6 +15,7 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
     private readonly Dictionary<string, HandlerWrapper> _handlers;
     private readonly ILogger<RabbitMQBasicConsumer> _logger;
     private readonly BrokerId _brokerId;
+    private readonly RabbitMQSettings _settings;
 
     public RabbitMQBasicConsumer(
         IServiceProvider serviceProvider,
@@ -28,6 +29,7 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
         _handlers = _serviceProvider.GetKeyedServices<HandlerWrapper>(id).ToDictionary(_ => nameResolver.ResolveOutboundName(_.MessageType));
         _brokerId = id;
         _logger = logger;
+        _settings = _serviceProvider.GetRequiredKeyedService<RabbitMQSettings>(id);
     }
 
     public override async Task HandleBasicDeliverAsync(
@@ -78,7 +80,7 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
                     deliveryTag,
                     exchange,
                     routingKey);
-                await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken);
+                await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: RequeueOnFailure, cancellationToken);
             }
         }
         catch (Exception ex)
@@ -89,9 +91,11 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
                 deliveryTag,
                 exchange,
                 routingKey);
-            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: false, cancellationToken);
+            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: RequeueOnFailure, cancellationToken);
         }
     }
+
+    private bool RequeueOnFailure => string.IsNullOrWhiteSpace(_settings.DeadLetterExchange);
 
     public override async Task HandleChannelShutdownAsync(object channel, ShutdownEventArgs reason)
     {

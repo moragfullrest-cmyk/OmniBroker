@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
+using OmniBroker.Kafka.ServiceSetup;
 
 namespace OmniBroker.Kafka.Implementations;
 
@@ -13,20 +14,26 @@ internal sealed class KafkaConsumer : BackgroundService
     private readonly IServiceProvider _serviceProvider;
     private readonly Dictionary<string, HandlerWrapper> _handlers;
     private readonly IConsumer<string, byte[]> _consumer;
+    private readonly IProducer<string, byte[]>? _producer;
     private readonly ILogger _logger;
     private readonly BrokerId _brokerId;
+    private readonly string? _deadLetterTopic;
 
     public KafkaConsumer(
         IServiceProvider serviceProvider,
         BrokerId id,
         ILogger<KafkaConsumer> logger,
-        INameResolver nameResolver)
+        INameResolver nameResolver,
+        KafkaSettings? settings = null)
     {
         _serviceProvider = serviceProvider;
         _handlers = _serviceProvider.GetKeyedServices<HandlerWrapper>(id).ToDictionary(_ => nameResolver.ResolveInboundName(_.MessageType));
         _consumer = _serviceProvider.GetRequiredKeyedService<IConsumer<string, byte[]>>(id);
         _logger = logger;
         _brokerId = id;
+        _deadLetterTopic = settings?.DeadLetterTopic;
+        if (!string.IsNullOrWhiteSpace(_deadLetterTopic))
+            _producer = _serviceProvider.GetRequiredKeyedService<IProducer<string, byte[]>>(id);
     }
 
     public override Task StartAsync(CancellationToken cancellationToken)
@@ -87,6 +94,7 @@ internal sealed class KafkaConsumer : BackgroundService
                         "Handler returned false; committing and skipping. Topic={Topic}, Offset={Offset}",
                         receivedMessage.Topic,
                         receivedMessage.Offset);
+                    await TryPublishDeadLetterAsync(receivedMessage, "Handler returned false", stoppingToken);
                 }
 
                 _consumer.Commit(receivedMessage);
@@ -104,6 +112,7 @@ internal sealed class KafkaConsumer : BackgroundService
                 _logger.LogError(ex, "Unexpected error processing Kafka message");
                 if (receivedMessage is not null)
                 {
+                    await TryPublishDeadLetterAsync(receivedMessage, ex.Message, stoppingToken);
                     try
                     {
                         _consumer.Commit(receivedMessage);
@@ -114,6 +123,47 @@ internal sealed class KafkaConsumer : BackgroundService
                     }
                 }
             }
+        }
+    }
+
+    private async Task TryPublishDeadLetterAsync(
+        ConsumeResult<string, byte[]> receivedMessage,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_deadLetterTopic) || _producer is null)
+            return;
+
+        try
+        {
+            var headers = new Headers
+            {
+                { KafkaMessageHeaders.SourceTopic, Encoding.UTF8.GetBytes(receivedMessage.Topic) }
+            };
+
+            string? correlationId = ReadCorrelationId(receivedMessage.Message.Headers);
+            if (!string.IsNullOrEmpty(correlationId))
+                headers.Add(KafkaMessageHeaders.CorrelationId, Encoding.UTF8.GetBytes(correlationId));
+
+            if (!string.IsNullOrEmpty(reason))
+                headers.Add(KafkaMessageHeaders.Error, Encoding.UTF8.GetBytes(reason));
+
+            await _producer.ProduceAsync(
+                _deadLetterTopic,
+                new Message<string, byte[]>
+                {
+                    Key = receivedMessage.Message.Key,
+                    Value = receivedMessage.Message.Value,
+                    Headers = headers
+                },
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(
+                ex,
+                "Failed to publish Kafka message to dead-letter topic {DeadLetterTopic}",
+                _deadLetterTopic);
         }
     }
 

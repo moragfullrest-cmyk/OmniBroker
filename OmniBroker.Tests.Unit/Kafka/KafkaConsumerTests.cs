@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text;
 using Confluent.Kafka;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -6,6 +7,7 @@ using Moq;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.Kafka.Implementations;
+using OmniBroker.Kafka.ServiceSetup;
 using OmniBroker.Tests.Unit.Fixtures;
 using Shouldly;
 
@@ -20,8 +22,18 @@ public sealed class KafkaConsumerTests
         await (Task)method.Invoke(consumer, [token])!;
     }
 
+    private static KafkaSettings Settings(string? deadLetterTopic = null) => new()
+    {
+        Hosts = "localhost:9092",
+        DeadLetterTopic = deadLetterTopic
+    };
+
     private static (KafkaConsumer Consumer, Mock<IConsumer<string, byte[]>> Kafka, List<ConsumeResult<string, byte[]>> Committed)
-        Create(HandlerWrapper? handler = null, Action<Mock<IConsumer<string, byte[]>>>? configure = null)
+        Create(
+            HandlerWrapper? handler = null,
+            Action<Mock<IConsumer<string, byte[]>>>? configure = null,
+            Mock<IProducer<string, byte[]>>? producer = null,
+            KafkaSettings? settings = null)
     {
         var brokerId = new BrokerId();
         var kafka = new Mock<IConsumer<string, byte[]>>();
@@ -33,6 +45,8 @@ public sealed class KafkaConsumerTests
         services.AddKeyedSingleton(brokerId, kafka.Object);
         if (handler is not null)
             services.AddKeyedSingleton(brokerId, handler);
+        if (producer is not null)
+            services.AddKeyedSingleton(brokerId, producer.Object);
 
         INameResolver resolver = new KafkaNameResolver();
         configure?.Invoke(kafka);
@@ -41,16 +55,17 @@ public sealed class KafkaConsumerTests
             services.BuildServiceProvider(),
             brokerId,
             NullLogger<KafkaConsumer>.Instance,
-            resolver);
+            resolver,
+            settings);
 
         return (consumer, kafka, committed);
     }
 
-    private static ConsumeResult<string, byte[]> Result(string topic, byte[]? body)
+    private static ConsumeResult<string, byte[]> Result(string topic, byte[]? body, string? key = null, Headers? headers = null)
         => new()
         {
             Topic = topic,
-            Message = new Message<string, byte[]> { Value = body! }
+            Message = new Message<string, byte[]> { Key = key!, Value = body!, Headers = headers }
         };
 
     [Fact]
@@ -114,6 +129,7 @@ public sealed class KafkaConsumerTests
     {
         using var cts = new CancellationTokenSource();
         int calls = 0;
+        var producer = new Mock<IProducer<string, byte[]>>();
         (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
             new HandlerWrapper(typeof(TestMessage),
             [
@@ -129,11 +145,15 @@ public sealed class KafkaConsumerTests
                         cts.Cancel();
                         throw new OperationCanceledException(cts.Token);
                     });
-            });
+            },
+            producer);
 
         await RunExecuteAsync(consumer, cts.Token);
 
         committed.Count.ShouldBe(1);
+        producer.Verify(
+            p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -141,6 +161,7 @@ public sealed class KafkaConsumerTests
     {
         using var cts = new CancellationTokenSource();
         int calls = 0;
+        var producer = new Mock<IProducer<string, byte[]>>();
         (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
             new HandlerWrapper(typeof(TestMessage),
             [
@@ -156,11 +177,15 @@ public sealed class KafkaConsumerTests
                         cts.Cancel();
                         throw new OperationCanceledException(cts.Token);
                     });
-            });
+            },
+            producer);
 
         await RunExecuteAsync(consumer, cts.Token);
 
         committed.Count.ShouldBe(1);
+        producer.Verify(
+            p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 
     [Fact]
@@ -215,5 +240,109 @@ public sealed class KafkaConsumerTests
         await RunExecuteAsync(consumer, cts.Token);
 
         committed.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Handler_false_with_dead_letter_topic_produces_then_commits()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        byte[] body = [1, 2];
+        var producer = new Mock<IProducer<string, byte[]>>();
+        producer.Setup(p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DeliveryResult<string, byte[]>());
+
+        (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, _, _) => Task.FromResult(false)
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result(nameof(TestMessage), body, key: "k1");
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            },
+            producer,
+            Settings("dlq-topic"));
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        producer.Verify(p => p.ProduceAsync(
+            "dlq-topic",
+            It.Is<Message<string, byte[]>>(m =>
+                m.Key == "k1"
+                && m.Value == body
+                && m.Headers.Any(h => h.Key == KafkaMessageHeaders.SourceTopic
+                    && Encoding.UTF8.GetString(h.GetValueBytes()) == nameof(TestMessage))),
+            It.IsAny<CancellationToken>()), Times.Once);
+        committed.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Handler_false_with_dead_letter_topic_produce_throws_still_commits()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        var producer = new Mock<IProducer<string, byte[]>>();
+        producer.Setup(p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("produce failed"));
+
+        (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, _, _) => Task.FromResult(false)
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result(nameof(TestMessage), [1]);
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            },
+            producer,
+            Settings("dlq-topic"));
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        committed.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Unknown_topic_with_dead_letter_topic_commits_without_produce()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        var producer = new Mock<IProducer<string, byte[]>>();
+        (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
+            configure: c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result("UnknownTopic", [1]);
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            },
+            producer: producer,
+            settings: Settings("dlq-topic"));
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        committed.Count.ShouldBe(1);
+        producer.Verify(
+            p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
     }
 }

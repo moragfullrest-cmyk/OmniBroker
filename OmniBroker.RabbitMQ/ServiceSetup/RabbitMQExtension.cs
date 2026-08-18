@@ -212,8 +212,8 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
         INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerId);
         IConnection connection = runtime.RequireConnection();
         await TopologyDeclarer.EnsureProducersDeclared(connection, nameResolver, builder);
-        await TopologyDeclarer.EnsureConsumersDeclared(connection, nameResolver, builder);
-        await TopologyDeclarer.EnsureRpcDeclared(connection, nameResolver, builder);
+        await TopologyDeclarer.EnsureConsumersDeclared(connection, nameResolver, builder, settings.DeadLetterExchange);
+        await TopologyDeclarer.EnsureRpcDeclared(connection, nameResolver, builder, settings.DeadLetterExchange);
     }
 
     internal async Task RecoverAsync(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)

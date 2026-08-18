@@ -42,7 +42,12 @@ internal sealed class KafkaExtension(KafkaSettings settings, BrokerId brokerId) 
                 CreateMessage: HandlerWrapper.BuildCreateMessage(handler.Key)));
         }
 
-        services.AddSingleton<IHostedService, KafkaConsumer>((s) => new KafkaConsumer(s, BrokerId, s.GetRequiredService<ILogger<KafkaConsumer>>(), s.GetRequiredKeyedService<INameResolver>(BrokerId)));
+        services.AddSingleton<IHostedService, KafkaConsumer>((s) => new KafkaConsumer(
+            s,
+            BrokerId,
+            s.GetRequiredService<ILogger<KafkaConsumer>>(),
+            s.GetRequiredKeyedService<INameResolver>(BrokerId),
+            settings));
 
         return Task.CompletedTask;
     }
@@ -55,24 +60,24 @@ internal sealed class KafkaExtension(KafkaSettings settings, BrokerId brokerId) 
     }
     public Task SetupProducers(IServiceCollection services, BrokerOptionsBuilder builder)
     {
-        if (builder.Producables.Count == 0)
-            return Task.CompletedTask;
-
-        services.AddKeyedSingleton<IProducer<string, byte[]>>(serviceKey: BrokerId, implementationFactory: (sp, o) =>
+        if (builder.Producables.Count > 0 || !string.IsNullOrWhiteSpace(settings.DeadLetterTopic))
         {
-            var config = new ProducerConfig
+            services.AddKeyedSingleton<IProducer<string, byte[]>>(serviceKey: BrokerId, implementationFactory: (sp, o) =>
             {
-                BootstrapServers = settings.Hosts,
-                Acks = Acks.All,
-                EnableIdempotence = true,
-                MessageSendMaxRetries = 3,
-                RetryBackoffMs = 100
-            };
-            if (settings.ClientId is not null)
-                config.ClientId = settings.ClientId;
-            ApplySecurity(config);
-            return new ProducerBuilder<string, byte[]>(config).Build();
-        });
+                var config = new ProducerConfig
+                {
+                    BootstrapServers = settings.Hosts,
+                    Acks = Acks.All,
+                    EnableIdempotence = true,
+                    MessageSendMaxRetries = 3,
+                    RetryBackoffMs = 100
+                };
+                if (settings.ClientId is not null)
+                    config.ClientId = settings.ClientId;
+                ApplySecurity(config);
+                return new ProducerBuilder<string, byte[]>(config).Build();
+            });
+        }
 
         foreach (Type type in builder.Producables)
         {

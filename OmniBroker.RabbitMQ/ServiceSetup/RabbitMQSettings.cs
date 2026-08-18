@@ -44,4 +44,9 @@ public sealed class RabbitMQSettings
     /// Maximum channel pool size
     /// </summary>
     public int MaxChannelPoolSize { get; init; } = 32;
+
+    /// <summary>
+    /// Optional dead-letter exchange. When set, consumer and RPC receive queues use x-dead-letter-exchange; handler failures are nacked without requeue.
+    /// </summary>
+    public string? DeadLetterExchange { get; init; }
 }

@@ -14,8 +14,17 @@ namespace OmniBroker.Tests.Unit.RabbitMq;
 
 public sealed class RabbitMQBasicConsumerTests
 {
+    private static RabbitMQSettings Settings(string? deadLetterExchange = null) => new()
+    {
+        HostName = "localhost",
+        UserName = "guest",
+        Password = "guest",
+        DeadLetterExchange = deadLetterExchange
+    };
+
     private static (RabbitMQBasicConsumer Consumer, Mock<IChannel> Channel, BrokerId BrokerId) CreateConsumer(
-        Action<IServiceCollection, BrokerId>? configureServices = null)
+        Action<IServiceCollection, BrokerId>? configureServices = null,
+        string? deadLetterExchange = null)
     {
         var brokerId = new BrokerId();
         var channel = new Mock<IChannel>();
@@ -26,6 +35,7 @@ public sealed class RabbitMQBasicConsumerTests
 
         var services = new ServiceCollection();
         services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver("svc"));
+        services.AddKeyedSingleton(brokerId, Settings(deadLetterExchange));
         configureServices?.Invoke(services, brokerId);
         ServiceProvider provider = services.BuildServiceProvider();
 
@@ -86,7 +96,7 @@ public sealed class RabbitMQBasicConsumerTests
 
         await consumer.HandleBasicDeliverAsync("ct", 2, false, nameof(TestMessage), "rk", Props(), new byte[] { 1 });
 
-        channel.Verify(c => c.BasicNackAsync(2, false, false, It.IsAny<CancellationToken>()), Times.Once);
+        channel.Verify(c => c.BasicNackAsync(2, false, true, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -100,7 +110,22 @@ public sealed class RabbitMQBasicConsumerTests
 
         await consumer.HandleBasicDeliverAsync("ct", 3, false, nameof(TestMessage), "rk", Props(), new byte[] { 1 });
 
-        channel.Verify(c => c.BasicNackAsync(3, false, false, It.IsAny<CancellationToken>()), Times.Once);
+        channel.Verify(c => c.BasicNackAsync(3, false, true, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Deliver_handler_false_with_dead_letter_exchange_nacks_without_requeue()
+    {
+        (RabbitMQBasicConsumer consumer, Mock<IChannel> channel, _) = CreateConsumer(
+            configureServices: (services, id) =>
+            {
+                services.AddKeyedSingleton(id, Wrapper((_, _, _) => Task.FromResult(false)));
+            },
+            deadLetterExchange: "dlx");
+
+        await consumer.HandleBasicDeliverAsync("ct", 8, false, nameof(TestMessage), "rk", Props(), new byte[] { 1 });
+
+        channel.Verify(c => c.BasicNackAsync(8, false, false, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -137,6 +162,7 @@ public sealed class RabbitMQBasicConsumerTests
 
         var services = new ServiceCollection();
         services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver("svc"));
+        services.AddKeyedSingleton(brokerId, Settings());
         services.AddKeyedSingleton(brokerId, runtime);
         ServiceProvider provider = services.BuildServiceProvider();
 
@@ -163,6 +189,7 @@ public sealed class RabbitMQBasicConsumerTests
 
         var services = new ServiceCollection();
         services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver("svc"));
+        services.AddKeyedSingleton(brokerId, Settings());
         services.AddKeyedSingleton(brokerId, runtime);
         ServiceProvider provider = services.BuildServiceProvider();
 
@@ -184,6 +211,7 @@ public sealed class RabbitMQBasicConsumerTests
 
         var services = new ServiceCollection();
         services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver("svc"));
+        services.AddKeyedSingleton(brokerId, Settings());
         services.AddKeyedSingleton(brokerId, runtime);
         ServiceProvider provider = services.BuildServiceProvider();
 

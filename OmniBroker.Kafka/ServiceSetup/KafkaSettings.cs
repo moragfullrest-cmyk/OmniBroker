@@ -46,4 +46,9 @@ public sealed class KafkaSettings
     /// SASL mechanism
     /// </summary>
     public SaslMechanism? SaslMechanism { get; init; }
+
+    /// <summary>
+    /// Optional dead-letter topic. When set, failed handler results are produced here before the original offset is committed.
+    /// </summary>
+    public string? DeadLetterTopic { get; init; }
 }
