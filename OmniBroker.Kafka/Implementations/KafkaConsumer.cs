@@ -195,7 +195,14 @@ internal sealed class KafkaConsumer : BackgroundService
             IProducer<string, byte[]>? producer = _serviceProvider.GetKeyedService<IProducer<string, byte[]>>(_brokerId);
             if (producer is not null)
             {
-                producer.Flush(cancellationToken);
+                try
+                {
+                    producer.Flush(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Host stop token may already be cancelled; consumer is still closed above.
+                }
                 // Do NOT Dispose here — IProducer is keyed singleton owned by DI
             }
         }

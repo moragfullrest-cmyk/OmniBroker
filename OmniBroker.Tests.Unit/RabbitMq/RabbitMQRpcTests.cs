@@ -97,10 +97,24 @@ public sealed class RabbitMQRpcTests
     [Fact]
     public async Task Call_cancellation_throws()
     {
-        (RabbitMQBasicRpcCaller<TestMessage, TestReplyMessage> caller, _, _, _) = CreateCaller(TimeSpan.FromMinutes(1));
+        (RabbitMQBasicRpcCaller<TestMessage, TestReplyMessage> caller, Mock<IProducer<TestMessage>> producer, ConcurrentDictionary<string, TaskCompletionSource<IMessage>> pending, _) =
+            CreateCaller(TimeSpan.FromMinutes(1));
+
+        TaskCompletionSource<IMessage>? captured = null;
+        producer.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .Callback<TestMessage, PublishOptions?, CancellationToken>((_, options, _) =>
+            {
+                captured = pending[options!.CorrelationId!];
+            })
+            .ReturnsAsync(true);
+
         using var cts = new CancellationTokenSource(50);
 
         await Should.ThrowAsync<OperationCanceledException>(() => caller.Call(new TestMessage(), cts.Token));
+
+        pending.IsEmpty.ShouldBeTrue();
+        captured.ShouldNotBeNull();
+        captured.Task.IsCanceled.ShouldBeTrue();
     }
 
     [Fact]
@@ -156,6 +170,41 @@ public sealed class RabbitMQRpcTests
 
         await Should.ThrowAsync<InvalidOperationException>(() =>
             del(new ServiceCollection().BuildServiceProvider(), new TestMessage(), new MessageContext(new BrokerId(), null)));
+    }
+
+    [Fact]
+    public async Task ReplyDelegate_forwards_cancellation_token_to_publish()
+    {
+        MethodInfo method = typeof(RabbitMQExtension)
+            .GetMethod("CreateReplyDelegate", BindingFlags.NonPublic | BindingFlags.Static)!
+            .MakeGenericMethod(typeof(TestReplyMessage));
+        var del = (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>)method.Invoke(
+            null,
+            [(Delegate)(Func<TestMessage, Task<TestReplyMessage>>)(_ => Task.FromResult(new TestReplyMessage { Body = [1] }))])!;
+
+        var brokerId = new BrokerId();
+        var builder = new BrokerOptionsBuilder { BrokerId = brokerId, SetupName = "rpc-test" };
+        builder.UseRabbitMq(Settings());
+
+        var producer = new Mock<IProducer<TestReplyMessage>>();
+        producer.Setup(p => p.Publish(It.IsAny<TestReplyMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var services = new ServiceCollection();
+        services.AddKeyedSingleton<IProducer<TestReplyMessage>>(brokerId, producer.Object);
+        services.AddKeyedSingleton(brokerId, builder);
+
+        using var cts = new CancellationTokenSource();
+        HandleResult result = await del(
+            services.BuildServiceProvider(),
+            new TestMessage { CorrelationId = "corr" },
+            new MessageContext(brokerId, new RabbitMQReplyInfo { ReplyTo = "reply-q" }, cts.Token));
+
+        result.ShouldBe(HandleResult.Ack);
+        producer.Verify(p => p.Publish(
+            It.IsAny<TestReplyMessage>(),
+            It.IsAny<PublishOptions?>(),
+            cts.Token), Times.Once);
     }
 
     [Fact]

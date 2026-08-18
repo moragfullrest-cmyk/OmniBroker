@@ -1,15 +1,20 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace OmniBroker.Infrastructure;
 
 public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TMessage : IMessage
 {
     private readonly List<IProducer<TMessage>> _producers;
+    private readonly ILogger<MultiBrokerProducer<TMessage>> _logger;
 
     public MultiBrokerProducer(IServiceProvider services)
     {
         IEnumerable<BrokerOptionsBuilder> builders = services.GetServices<BrokerOptionsBuilder>();
         _producers = [.. builders.SelectMany(_ => services.GetKeyedServices<IProducer<TMessage>>(_.BrokerId))];
+        _logger = services.GetService<ILogger<MultiBrokerProducer<TMessage>>>()
+            ?? NullLogger<MultiBrokerProducer<TMessage>>.Instance;
     }
 
     public async Task<bool> Publish(TMessage message, PublishOptions? options = null, CancellationToken cancellationToken = default)
@@ -28,7 +33,15 @@ public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TM
         bool result = true;
         foreach (IProducer<TMessage> producer in _producers)
         {
-            result &= await producer.Publish(message, options, cancellationToken);
+            bool published = await producer.Publish(message, options, cancellationToken);
+            if (!published)
+            {
+                _logger.LogWarning(
+                    "Producer {ProducerType} failed to publish {MessageType}",
+                    producer.GetType().Name,
+                    typeof(TMessage).Name);
+                result = false;
+            }
         }
         return result;
     }

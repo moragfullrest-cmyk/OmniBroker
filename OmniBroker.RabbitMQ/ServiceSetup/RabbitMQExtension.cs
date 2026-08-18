@@ -154,7 +154,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
                 CorrelationId: message.CorrelationId,
                 Destination: builder.NameResolver!.ResolveOutboundName(typeof(TOutput)),
                 ReplyTo: null
-            ));
+            ), context.CancellationToken);
             return published ? HandleResult.Ack : HandleResult.Retry;
         };
     }

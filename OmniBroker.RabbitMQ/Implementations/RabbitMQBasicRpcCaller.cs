@@ -62,6 +62,11 @@ internal sealed class RabbitMQBasicRpcCaller<TInputMessage, TOutputMessage> : IR
                 tcs.TrySetCanceled();
                 throw new TimeoutException("The operation has timed out.");
             }
+            catch (OperationCanceledException)
+            {
+                tcs.TrySetCanceled();
+                throw;
+            }
         }
         finally
         {

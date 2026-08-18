@@ -370,4 +370,19 @@ public sealed class KafkaConsumerTests
         producer.Verify(p => p.Dispose(), Times.Never);
         kafka.Verify(c => c.Close(), Times.Once);
     }
+
+    [Fact]
+    public async Task StopAsync_flush_canceled_still_closes_consumer()
+    {
+        var producer = new Mock<IProducer<string, byte[]>>();
+        producer.Setup(p => p.Flush(It.IsAny<CancellationToken>()))
+            .Throws(new OperationCanceledException());
+        (KafkaConsumer consumer, Mock<IConsumer<string, byte[]>> kafka, _) = Create(producer: producer);
+        kafka.Setup(c => c.Close());
+
+        await consumer.StopAsync(new CancellationToken(canceled: true));
+
+        kafka.Verify(c => c.Close(), Times.Once);
+        producer.Verify(p => p.Dispose(), Times.Never);
+    }
 }

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Moq;
 using OmniBroker.Infrastructure;
 using OmniBroker.Tests.Unit.Fixtures;
@@ -86,6 +87,46 @@ public sealed class MultiBrokerProducerTests
         bool result = await sut.Publish(new TestMessage());
 
         result.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Publish_one_producer_false_logs_warning()
+    {
+        var first = new Mock<IProducer<TestMessage>>();
+        first.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var second = new Mock<IProducer<TestMessage>>();
+        second.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        var logger = new Mock<ILogger<MultiBrokerProducer<TestMessage>>>();
+
+        var firstId = new BrokerId();
+        var secondId = new BrokerId();
+        var firstBuilder = new BrokerOptionsBuilder { BrokerId = firstId };
+        var secondBuilder = new BrokerOptionsBuilder { BrokerId = secondId };
+
+        var services = new ServiceCollection();
+        services.AddSingleton(firstBuilder);
+        services.AddSingleton(secondBuilder);
+        services.AddKeyedSingleton(firstId, first.Object);
+        services.AddKeyedSingleton(secondId, second.Object);
+        services.AddSingleton<ILogger<MultiBrokerProducer<TestMessage>>>(logger.Object);
+
+        var sut = new MultiBrokerProducer<TestMessage>(services.BuildServiceProvider());
+
+        bool result = await sut.Publish(new TestMessage());
+
+        result.ShouldBeFalse();
+        logger.Verify(
+            x => x.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.Is<It.IsAnyType>((state, _) =>
+                    state.ToString()!.Contains(second.Object.GetType().Name)
+                    && state.ToString()!.Contains(nameof(TestMessage))),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
     }
 
     [Fact]
