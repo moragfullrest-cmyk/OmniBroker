@@ -84,6 +84,33 @@ public sealed class BrokerExtensionsTests
 
         Should.Throw<ArgumentException>(() => builder.AddConsumerFor<TestMessage>(
             (TestMessage _) => Task.CompletedTask));
+        Should.Throw<ArgumentException>(() => builder.AddConsumerFor<TestMessage>(
+            (TestMessage _) => Task.FromResult(true)));
+    }
+
+    [Fact]
+    public async Task AddConsumerFor_CancellationToken_parameter_receives_token_from_MessageContext()
+    {
+        var builder = new BrokerOptionsBuilder();
+        builder.UseRabbitMq(RabbitSettings());
+        using var cts = new CancellationTokenSource();
+        CancellationToken captured = default;
+
+        builder.AddConsumerFor<TestMessage>((TestMessage _, CancellationToken token) =>
+        {
+            captured = token;
+            return Task.FromResult(HandleResult.Ack);
+        });
+
+        Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> handler =
+            builder.Consumables[typeof(TestMessage)].Single();
+        HandleResult result = await handler(
+            new ServiceCollection().BuildServiceProvider(),
+            new TestMessage(),
+            new MessageContext(builder.BrokerId, null, cts.Token));
+
+        result.ShouldBe(HandleResult.Ack);
+        captured.ShouldBe(cts.Token);
     }
 
     [Fact]
@@ -93,7 +120,7 @@ public sealed class BrokerExtensionsTests
         builder.UseRabbitMq(RabbitSettings());
 
         Should.Throw<ArgumentException>(() => builder.AddConsumerFor<TestMessage>(
-            () => Task.FromResult(true)));
+            () => Task.FromResult(HandleResult.Ack)));
     }
 
     [Fact]
@@ -103,7 +130,7 @@ public sealed class BrokerExtensionsTests
         builder.UseRabbitMq(RabbitSettings());
 
         Should.Throw<ArgumentException>(() => builder.AddConsumerFor<AbstractTestMessage>(
-            (AbstractTestMessage _) => Task.FromResult(true)));
+            (AbstractTestMessage _) => Task.FromResult(HandleResult.Ack)));
     }
 
     [Fact]
@@ -145,7 +172,7 @@ public sealed class BrokerExtensionsTests
         {
             b.UseRabbitMq(RabbitSettings());
             b.AddProducerFor<TestMessage>();
-            b.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+            b.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
         });
 
         services.Any(d => d.ServiceType == typeof(IProducer<TestMessage>)).ShouldBeTrue();

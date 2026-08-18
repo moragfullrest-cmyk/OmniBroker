@@ -49,7 +49,7 @@ public sealed class RabbitMQBasicConsumerTests
     }
 
     private static HandlerWrapper Wrapper(
-        Func<IServiceProvider, IMessage, MessageContext, Task<bool>> handler)
+        Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> handler)
         => new(typeof(TestMessage), [handler], HandlerWrapper.BuildCreateMessage(typeof(TestMessage)));
 
     private static IReadOnlyBasicProperties Props(string? correlationId = null, string? replyTo = null)
@@ -77,7 +77,7 @@ public sealed class RabbitMQBasicConsumerTests
         (RabbitMQBasicConsumer consumer, Mock<IChannel> channel, _) = CreateConsumer(
             configureServices: (services, id) =>
             {
-                services.AddKeyedSingleton(id, Wrapper((_, _, _) => Task.FromResult(true)));
+                services.AddKeyedSingleton(id, Wrapper((_, _, _) => Task.FromResult(HandleResult.Ack)));
             });
 
         await consumer.HandleBasicDeliverAsync("ct", 1, false, nameof(TestMessage), "rk", Props("c"), new byte[] { 1 });
@@ -91,7 +91,7 @@ public sealed class RabbitMQBasicConsumerTests
         (RabbitMQBasicConsumer consumer, Mock<IChannel> channel, _) = CreateConsumer(
             configureServices: (services, id) =>
             {
-                services.AddKeyedSingleton(id, Wrapper((_, _, _) => Task.FromResult(false)));
+                services.AddKeyedSingleton(id, Wrapper((_, _, _) => Task.FromResult(HandleResult.Retry)));
             });
 
         await consumer.HandleBasicDeliverAsync("ct", 2, false, nameof(TestMessage), "rk", Props(), new byte[] { 1 });
@@ -119,7 +119,7 @@ public sealed class RabbitMQBasicConsumerTests
         (RabbitMQBasicConsumer consumer, Mock<IChannel> channel, _) = CreateConsumer(
             configureServices: (services, id) =>
             {
-                services.AddKeyedSingleton(id, Wrapper((_, _, _) => Task.FromResult(false)));
+                services.AddKeyedSingleton(id, Wrapper((_, _, _) => Task.FromResult(HandleResult.Retry)));
             },
             deadLetterExchange: "dlx");
 
@@ -138,7 +138,7 @@ public sealed class RabbitMQBasicConsumerTests
                 services.AddKeyedSingleton(id, Wrapper((_, _, ctx) =>
                 {
                     captured = ctx.ReplyInfo as RabbitMQReplyInfo;
-                    return Task.FromResult(true);
+                    return Task.FromResult(HandleResult.Ack);
                 }));
             });
 

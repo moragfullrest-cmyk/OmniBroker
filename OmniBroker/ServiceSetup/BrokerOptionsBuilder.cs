@@ -11,7 +11,7 @@ public sealed class BrokerOptionsBuilder
     internal Dictionary<Type, Type> RpcCallers { get; set; } = [];
     internal Dictionary<Type, Delegate> RpcReceivers { get; set; } = [];
     internal HashSet<Type> Producables { get; set; } = [];
-    internal Dictionary<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<bool>>>> Consumables { get; set; } = [];
+    internal Dictionary<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>>> Consumables { get; set; } = [];
     internal IBrokerExtension Extension { get; set; }
 
     /// <summary>

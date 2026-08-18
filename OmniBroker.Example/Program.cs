@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
 using OmniBroker;
+using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.Kafka.ServiceSetup;
 using OmniBroker.RabbitMQ;
@@ -26,7 +27,7 @@ if (rabbitSection.GetValue("Enabled", true))
         options.SetupName = "Example";
         options.UseRabbitMq(rabbitSettings);
         options.AddProducerFor<ExampleMessage>();
-        options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"RabbitMQ received: {m.Text}"); return Task.FromResult(true); });
+        options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"RabbitMQ received: {m.Text}"); return Task.FromResult(HandleResult.Ack); });
         options.AddConsumerFor<ExampleMessage>(MessageHandler.HandleMyMessage);
         options.AddRpcCaller<ExampleMessage2, ExampleMessage3>();
         options.AddRpcReceiver<ExampleMessage2, ExampleMessage3>(async (ExampleMessage2 message) =>
@@ -47,7 +48,7 @@ if (kafkaSection.GetValue("Enabled", true))
         options.SetupName = "Example";
         options.UseKafka(kafkaSettings);
         options.AddProducerFor<ExampleMessage>();
-        options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"Kafka received: {m.Text}"); return Task.FromResult(true); });
+        options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"Kafka received: {m.Text}"); return Task.FromResult(HandleResult.Ack); });
     });
 }
 
@@ -123,9 +124,9 @@ public class ExampleMessage3 : IMessage
 
 public class MessageHandler
 {
-    public static Task<bool> HandleMyMessage(IHostEnvironment env, ExampleMessage message)
+    public static Task<HandleResult> HandleMyMessage(IHostEnvironment env, ExampleMessage message)
     {
         Console.WriteLine($"Message is {message.Text}");
-        return Task.FromResult(true);
+        return Task.FromResult(HandleResult.Ack);
     }
 }

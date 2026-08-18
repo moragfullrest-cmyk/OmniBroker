@@ -117,17 +117,17 @@ public sealed class RabbitMQRpcTests
     }
 
     [Fact]
-    public async Task CorrelationDelegate_empty_correlation_returns_false()
+    public async Task CorrelationDelegate_empty_correlation_returns_ack()
     {
         MethodInfo method = typeof(RabbitMQExtension)
             .GetMethod("CreateCorrelationDelegate", BindingFlags.NonPublic | BindingFlags.Static)!
             .MakeGenericMethod(typeof(TestReplyMessage));
-        var func = (Func<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>, TestReplyMessage, Task<bool>>)method.Invoke(null, null)!;
+        var func = (Func<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>, TestReplyMessage, Task<HandleResult>>)method.Invoke(null, null)!;
         var pending = new ConcurrentDictionary<string, TaskCompletionSource<IMessage>>();
 
-        bool result = await func(pending, new TestReplyMessage { CorrelationId = "" });
+        HandleResult result = await func(pending, new TestReplyMessage { CorrelationId = "" });
 
-        result.ShouldBeFalse();
+        result.ShouldBe(HandleResult.Ack);
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public sealed class RabbitMQRpcTests
         MethodInfo method = typeof(RabbitMQExtension)
             .GetMethod("CreateReplyDelegate", BindingFlags.NonPublic | BindingFlags.Static)!
             .MakeGenericMethod(typeof(TestReplyMessage));
-        var del = (Func<IServiceProvider, IMessage, MessageContext, Task<bool>>)method.Invoke(
+        var del = (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>)method.Invoke(
             null,
             [(Delegate)(Func<TestMessage, Task<TestReplyMessage?>>)(_ => Task.FromResult<TestReplyMessage?>(null))])!;
 
@@ -150,7 +150,7 @@ public sealed class RabbitMQRpcTests
         MethodInfo method = typeof(RabbitMQExtension)
             .GetMethod("CreateReplyDelegate", BindingFlags.NonPublic | BindingFlags.Static)!
             .MakeGenericMethod(typeof(TestReplyMessage));
-        var del = (Func<IServiceProvider, IMessage, MessageContext, Task<bool>>)method.Invoke(
+        var del = (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>)method.Invoke(
             null,
             [(Delegate)(Func<TestMessage, Task<TestReplyMessage>>)(_ => Task.FromResult(new TestReplyMessage()))])!;
 

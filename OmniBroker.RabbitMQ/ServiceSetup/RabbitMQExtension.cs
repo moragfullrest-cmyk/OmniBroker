@@ -44,7 +44,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
 
     public Task SetupConsumers(IServiceCollection services, BrokerOptionsBuilder builder)
     {
-        foreach (KeyValuePair<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<bool>>>> handler in builder.Consumables)
+        foreach (KeyValuePair<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>>> handler in builder.Consumables)
         {
             services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper(
                 MessageType: handler.Key,
@@ -79,7 +79,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
                 MessageType: t.Value,
                 Handlers:
                 [
-                    OmniBroker.BrokerExtensions.WrapActionDelegate<bool>((Delegate)typeof(RabbitMQExtension).GetMethod(nameof(CreateCorrelationDelegate)
+                    OmniBroker.BrokerExtensions.WrapActionDelegate<HandleResult>((Delegate)typeof(RabbitMQExtension).GetMethod(nameof(CreateCorrelationDelegate)
                     , System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.MakeGenericMethod(t.Value)
                     .Invoke(null, null)!)
                 ],
@@ -96,7 +96,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
                 MessageType: t.Key,
                 Handlers:
                 [
-                    OmniBroker.BrokerExtensions.WrapActionDelegate<bool>((Delegate)typeof(RabbitMQExtension).GetMethod(nameof(CreateReplyDelegate)
+                    OmniBroker.BrokerExtensions.WrapActionDelegate<HandleResult>((Delegate)typeof(RabbitMQExtension).GetMethod(nameof(CreateReplyDelegate)
                     , System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!.MakeGenericMethod(returnType)
                     .Invoke(null, [t.Value])!)
                 ],
@@ -115,23 +115,23 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
         return Task.CompletedTask;
     }
 
-    private static Func<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>, TOutput, Task<bool>> CreateCorrelationDelegate<TOutput>()
+    private static Func<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>, TOutput, Task<HandleResult>> CreateCorrelationDelegate<TOutput>()
         where TOutput : IMessage
     {
         return (operations, message) =>
         {
             if (string.IsNullOrEmpty(message.CorrelationId))
-                return Task.FromResult(false);
+                return Task.FromResult(HandleResult.Ack);
 
             if (operations.TryRemove(message.CorrelationId, out TaskCompletionSource<IMessage>? tcs))
             {
                 tcs.TrySetResult(message);
             }
-            return Task.FromResult(true);
+            return Task.FromResult(HandleResult.Ack);
         };
     }
 
-    private static Func<IServiceProvider, IMessage, MessageContext, Task<bool>> CreateReplyDelegate<TOutput>(Delegate action)
+    private static Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> CreateReplyDelegate<TOutput>(Delegate action)
         where TOutput : IMessage
     {
         var handler = OmniBroker.BrokerExtensions.WrapActionDelegate<TOutput>(action);
@@ -149,12 +149,13 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
                 throw new InvalidOperationException("RPC reply requires ReplyInfo.ReplyTo.");
             }
             result.Tag = replyInfo.ReplyTo;
-            return await producer.Publish(result, new PublishOptions
+            bool published = await producer.Publish(result, new PublishOptions
             (
                 CorrelationId: message.CorrelationId,
                 Destination: builder.NameResolver!.ResolveOutboundName(typeof(TOutput)),
                 ReplyTo: null
             ));
+            return published ? HandleResult.Ack : HandleResult.Retry;
         };
     }
 

@@ -80,7 +80,7 @@ public sealed class KafkaConsumerTests
                 (_, _, _) =>
                 {
                     handlerCalled = true;
-                    return Task.FromResult(true);
+                    return Task.FromResult(HandleResult.Ack);
                 }
             ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
             c =>
@@ -133,7 +133,7 @@ public sealed class KafkaConsumerTests
         (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
             new HandlerWrapper(typeof(TestMessage),
             [
-                (_, _, _) => Task.FromResult(false)
+                (_, _, _) => Task.FromResult(HandleResult.Retry)
             ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
             c =>
             {
@@ -218,7 +218,7 @@ public sealed class KafkaConsumerTests
         (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
             new HandlerWrapper(typeof(TestMessage),
             [
-                (_, _, _) => Task.FromResult(true)
+                (_, _, _) => Task.FromResult(HandleResult.Ack)
             ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
             c =>
             {
@@ -255,7 +255,7 @@ public sealed class KafkaConsumerTests
         (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
             new HandlerWrapper(typeof(TestMessage),
             [
-                (_, _, _) => Task.FromResult(false)
+                (_, _, _) => Task.FromResult(HandleResult.Retry)
             ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
             c =>
             {
@@ -296,7 +296,7 @@ public sealed class KafkaConsumerTests
         (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
             new HandlerWrapper(typeof(TestMessage),
             [
-                (_, _, _) => Task.FromResult(false)
+                (_, _, _) => Task.FromResult(HandleResult.Retry)
             ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
             c =>
             {

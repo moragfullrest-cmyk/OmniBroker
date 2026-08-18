@@ -33,27 +33,27 @@ public sealed class HandlerWrapperTests
         services.AddKeyedSingleton("explicit-key", new TestDependency { Value = "explicit" });
         ServiceProvider provider = services.BuildServiceProvider();
 
-        Func<IServiceProvider, IMessage, MessageContext, Task<bool>> softKeyed =
-            BrokerExtensions.WrapActionDelegate<bool>(
+        Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> softKeyed =
+            BrokerExtensions.WrapActionDelegate<HandleResult>(
                 (TestMessage message, TestDependency dep) =>
                 {
                     dep.Value.ShouldBe("broker-keyed");
                     message.ShouldNotBeNull();
-                    return Task.FromResult(true);
+                    return Task.FromResult(HandleResult.Ack);
                 });
 
         // FromKeyedServices is only used when soft lookup by CurrentBrokerId returns null.
         var otherBrokerId = new BrokerId();
-        Func<IServiceProvider, IMessage, MessageContext, Task<bool>> fromKeyed =
-            BrokerExtensions.WrapActionDelegate<bool>(
+        Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> fromKeyed =
+            BrokerExtensions.WrapActionDelegate<HandleResult>(
                 ([FromKeyedServices("explicit-key")] TestDependency dep, TestMessage message) =>
                 {
                     dep.Value.ShouldBe("explicit");
-                    return Task.FromResult(true);
+                    return Task.FromResult(HandleResult.Ack);
                 });
 
-        (await softKeyed(provider, new TestMessage(), new MessageContext(brokerId, null))).ShouldBeTrue();
-        (await fromKeyed(provider, new TestMessage(), new MessageContext(otherBrokerId, null))).ShouldBeTrue();
+        (await softKeyed(provider, new TestMessage(), new MessageContext(brokerId, null))).ShouldBe(HandleResult.Ack);
+        (await fromKeyed(provider, new TestMessage(), new MessageContext(otherBrokerId, null))).ShouldBe(HandleResult.Ack);
     }
 
     [Fact]
@@ -64,16 +64,36 @@ public sealed class HandlerWrapperTests
         services.AddSingleton(new TestDependency { Value = "unkeyed" });
         ServiceProvider provider = services.BuildServiceProvider();
 
-        Func<IServiceProvider, IMessage, MessageContext, Task<bool>> wrapped =
-            BrokerExtensions.WrapActionDelegate<bool>(
+        Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> wrapped =
+            BrokerExtensions.WrapActionDelegate<HandleResult>(
                 (TestMessage _, TestDependency dep) =>
                 {
                     dep.Value.ShouldBe("unkeyed");
-                    return Task.FromResult(true);
+                    return Task.FromResult(HandleResult.Ack);
                 });
 
-        bool result = await wrapped(provider, new TestMessage(), new MessageContext(brokerId, null));
+        HandleResult result = await wrapped(provider, new TestMessage(), new MessageContext(brokerId, null));
 
-        result.ShouldBeTrue();
+        result.ShouldBe(HandleResult.Ack);
+    }
+
+    [Fact]
+    public async Task WrapActionDelegate_passes_CancellationToken_from_MessageContext()
+    {
+        using var cts = new CancellationTokenSource();
+        Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> wrapped =
+            BrokerExtensions.WrapActionDelegate<HandleResult>(
+                (TestMessage _, CancellationToken token) =>
+                {
+                    token.ShouldBe(cts.Token);
+                    return Task.FromResult(HandleResult.Ack);
+                });
+
+        HandleResult result = await wrapped(
+            new ServiceCollection().BuildServiceProvider(),
+            new TestMessage(),
+            new MessageContext(new BrokerId(), null, cts.Token));
+
+        result.ShouldBe(HandleResult.Ack);
     }
 }

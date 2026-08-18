@@ -78,23 +78,24 @@ internal sealed class KafkaConsumer : BackgroundService
                 message.Body = receivedMessage.Message.Value;
                 message.CorrelationId = ReadCorrelationId(receivedMessage.Message.Headers) ?? message.CorrelationId;
 
-                bool result = true;
-                foreach (Func<IServiceProvider, IMessage, MessageContext, Task<bool>> handlerDelegate in handler.Handlers)
+                var context = new MessageContext(
+                    CurrentBrokerId: _brokerId,
+                    ReplyInfo: null,
+                    CancellationToken: stoppingToken);
+                HandleResult result = HandleResult.Ack;
+                foreach (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> handlerDelegate in handler.Handlers)
                 {
-                    result &= await handlerDelegate(scope.ServiceProvider, message, new MessageContext
-                    (
-                        CurrentBrokerId: _brokerId,
-                        null
-                    ));
+                    if (await handlerDelegate(scope.ServiceProvider, message, context) == HandleResult.Retry)
+                        result = HandleResult.Retry;
                 }
 
-                if (!result)
+                if (result == HandleResult.Retry)
                 {
                     _logger.LogWarning(
-                        "Handler returned false; committing and skipping. Topic={Topic}, Offset={Offset}",
+                        "Handler returned Retry; committing and skipping. Topic={Topic}, Offset={Offset}",
                         receivedMessage.Topic,
                         receivedMessage.Offset);
-                    await TryPublishDeadLetterAsync(receivedMessage, "Handler returned false", stoppingToken);
+                    await TryPublishDeadLetterAsync(receivedMessage, "Handler returned Retry", stoppingToken);
                 }
 
                 _consumer.Commit(receivedMessage);

@@ -61,8 +61,8 @@ public static class BrokerExtensions
 
         EnsureConcreteMessageType(messageType);
 
-        if (action.GetMethodInfo().ReturnType != typeof(Task<bool>))
-            throw new ArgumentException("Consuming method has to return Task<bool>");
+        if (action.GetMethodInfo().ReturnType != typeof(Task<HandleResult>))
+            throw new ArgumentException("Consuming method has to return Task<HandleResult>");
 
         if (action.GetMethodInfo().GetParameters().Any(_ => _.ParameterType == typeof(TMessage)) == false)
             throw new ArgumentException($"One of method parameters has to be of type {typeof(TMessage).Name}");
@@ -70,9 +70,9 @@ public static class BrokerExtensions
         EnsureNotInRpc(optionsBuilder, messageType);
 
         if (optionsBuilder.Consumables.ContainsKey(messageType) == false)
-            optionsBuilder.Consumables[messageType] = [WrapActionDelegate<bool>(action)];
+            optionsBuilder.Consumables[messageType] = [WrapActionDelegate<HandleResult>(action)];
         else
-            optionsBuilder.Consumables[messageType].Add(WrapActionDelegate<bool>(action));
+            optionsBuilder.Consumables[messageType].Add(WrapActionDelegate<HandleResult>(action));
 
         return optionsBuilder;
     }
@@ -197,6 +197,8 @@ public static class BrokerExtensions
             {
                 return contextParamExp;
             }
+            if (_.ParameterType == typeof(CancellationToken))
+                return Expression.Property(contextParamExp, nameof(MessageContext.CancellationToken));
 
             // 1) soft keyed by CurrentBrokerId (broker infrastructure)
             // 2) required keyed by [FromKeyedServices] if present

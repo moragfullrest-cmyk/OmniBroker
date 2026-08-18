@@ -59,24 +59,25 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
             IMessage message = handler.CreateMessage();
             message.Body = body.ToArray();
             message.CorrelationId = properties.CorrelationId;
-            bool result = true;
-            foreach (Func<IServiceProvider, IMessage, MessageContext, Task<bool>> _delegate in handler.Handlers)
+            var context = new MessageContext(
+                CurrentBrokerId: _brokerId,
+                ReplyInfo: new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo },
+                CancellationToken: cancellationToken);
+            HandleResult result = HandleResult.Ack;
+            foreach (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> _delegate in handler.Handlers)
             {
-                result &= await _delegate(scope.ServiceProvider, message, new MessageContext
-                (
-                    CurrentBrokerId: _brokerId,
-                    ReplyInfo: new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo }
-                ));
+                if (await _delegate(scope.ServiceProvider, message, context) == HandleResult.Retry)
+                    result = HandleResult.Retry;
             }
 
-            if (result)
+            if (result == HandleResult.Ack)
             {
                 await _channel.BasicAckAsync(deliveryTag, multiple: false, cancellationToken);
             }
             else
             {
                 _logger.LogWarning(
-                    "Handler returned false; nacking delivery {DeliveryTag} (exchange={Exchange}, routingKey={RoutingKey})",
+                    "Handler returned Retry; nacking delivery {DeliveryTag} (exchange={Exchange}, routingKey={RoutingKey})",
                     deliveryTag,
                     exchange,
                     routingKey);

@@ -5,7 +5,7 @@ namespace OmniBroker.Infrastructure;
 
 internal sealed record HandlerWrapper(
     Type MessageType,
-    List<Func<IServiceProvider, IMessage, MessageContext, Task<bool>>> Handlers,
+    List<Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>> Handlers,
     Func<IMessage> CreateMessage)
 {
     public static Func<IMessage> BuildCreateMessage(Type messageType)

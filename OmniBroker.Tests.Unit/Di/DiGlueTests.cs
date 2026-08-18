@@ -3,6 +3,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.Kafka.Implementations;
 using OmniBroker.Kafka.ServiceSetup;
@@ -178,7 +179,7 @@ public sealed class DiGlueTests
             UserName = "guest",
             Password = "guest"
         });
-        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
         var resolver = new RabbitMQNameResolver(builder.SetupName);
 
         await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder);
@@ -253,7 +254,7 @@ public sealed class DiGlueTests
             Password = "guest",
             DurableQueues = false
         });
-        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
         var resolver = new RabbitMQNameResolver(builder.SetupName);
 
         await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder, durableQueues: false);
@@ -303,7 +304,7 @@ public sealed class DiGlueTests
             UserName = "guest",
             Password = "guest"
         });
-        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
         var resolver = new RabbitMQNameResolver(builder.SetupName);
 
         await Should.ThrowAsync<InvalidOperationException>(() =>
@@ -355,7 +356,7 @@ public sealed class DiGlueTests
             Password = "guest",
             DeadLetterExchange = "dlx"
         });
-        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
         var resolver = new RabbitMQNameResolver(builder.SetupName);
 
         await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder, "dlx");
@@ -576,7 +577,7 @@ public sealed class DiGlueTests
             Password = "guest",
             PrefetchCount = 10
         });
-        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
         var extension = (RabbitMQExtension)builder.Extension!;
 
         var services = new ServiceCollection();

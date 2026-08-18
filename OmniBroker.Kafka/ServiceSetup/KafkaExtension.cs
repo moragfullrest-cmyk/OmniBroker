@@ -34,7 +34,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, BrokerId brokerId) 
             return new ConsumerBuilder<string, byte[]>(config).Build();
         });
 
-        foreach (KeyValuePair<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<bool>>>> handler in builder.Consumables)
+        foreach (KeyValuePair<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>>> handler in builder.Consumables)
         {
             services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper(
                 MessageType: handler.Key,
