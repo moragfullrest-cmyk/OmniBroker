@@ -564,25 +564,31 @@ public sealed class DiGlueTests
         channel.Setup(c => c.BasicConsumeAsync(
                 It.IsAny<string>(),
                 It.IsAny<bool>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
                 It.IsAny<IAsyncBasicConsumer>(),
                 It.IsAny<CancellationToken>()))
             .ReturnsAsync("tag");
 
         Mock<IConnection> connection = ConnectionWithChannel(channel);
         var builder = new BrokerOptionsBuilder { SetupName = "svc" };
-        builder.UseRabbitMq(new RabbitMQSettings
+        var settings = new RabbitMQSettings
         {
             HostName = "localhost",
             UserName = "guest",
             Password = "guest",
             PrefetchCount = 10
-        });
+        };
+        builder.UseRabbitMq(settings);
         builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
         var extension = (RabbitMQExtension)builder.Extension!;
 
         var services = new ServiceCollection();
         services.AddSingleton<ILogger<RabbitMQBasicConsumer>>(NullLogger<RabbitMQBasicConsumer>.Instance);
         services.AddKeyedSingleton<INameResolver>(builder.BrokerId, new RabbitMQNameResolver(builder.SetupName));
+        services.AddKeyedSingleton(builder.BrokerId, settings);
         var runtime = new RabbitMqRuntime { Connection = connection.Object };
         services.AddKeyedSingleton(builder.BrokerId, runtime);
         await extension.SetupConsumers(services, builder);
