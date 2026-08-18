@@ -1,33 +1,12 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using OmniBroker.Infrastructure;
 
 namespace OmniBroker;
 
 public static class BrokerExtensions
 {
-    /// <summary>
-    /// Start broker operations
-    /// </summary>
-    public static IHost UseBrokers(this IHost host)
-        => UseBrokersAsync(host).GetAwaiter().GetResult();
-
-    /// <summary>
-    /// Start broker operations asynchronously
-    /// </summary>
-    public static async Task<IHost> UseBrokersAsync(this IHost host)
-    {
-        foreach (BrokerOptionsBuilder builder in host.Services.GetServices<BrokerOptionsBuilder>())
-        {
-            await builder.Extension!.StartInfrastructure(host.Services, builder);
-            await builder.Extension.StartConsumers(host.Services, builder);
-        }
-
-        return host;
-    }
-
     /// <summary>
     /// Entry point for broker configuration
     /// </summary>

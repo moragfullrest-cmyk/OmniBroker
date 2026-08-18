@@ -345,4 +345,29 @@ public sealed class KafkaConsumerTests
             p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()),
             Times.Never);
     }
+
+    [Fact]
+    public async Task StopAsync_without_producer_does_not_throw()
+    {
+        (KafkaConsumer consumer, Mock<IConsumer<string, byte[]>> kafka, _) = Create();
+        kafka.Setup(c => c.Close());
+
+        await consumer.StopAsync(CancellationToken.None);
+
+        kafka.Verify(c => c.Close(), Times.Once);
+    }
+
+    [Fact]
+    public async Task StopAsync_with_producer_flushes_and_does_not_dispose()
+    {
+        var producer = new Mock<IProducer<string, byte[]>>();
+        (KafkaConsumer consumer, Mock<IConsumer<string, byte[]>> kafka, _) = Create(producer: producer);
+        kafka.Setup(c => c.Close());
+
+        await consumer.StopAsync(CancellationToken.None);
+
+        producer.Verify(p => p.Flush(It.IsAny<CancellationToken>()), Times.Once);
+        producer.Verify(p => p.Dispose(), Times.Never);
+        kafka.Verify(c => c.Close(), Times.Once);
+    }
 }

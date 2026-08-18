@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using OmniBroker.Infrastructure;
@@ -34,6 +35,9 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
         });
 
         services.AddKeyedSingleton<INameResolver>(BrokerId, builder.NameResolver!);
+
+        services.AddSingleton<IHostedService, RabbitMqBrokerHostedService>(s =>
+            new RabbitMqBrokerHostedService(s, BrokerId));
 
         return Task.CompletedTask;
     }
@@ -286,11 +290,14 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
             return;
 
         RabbitMqRuntime runtime = services.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+        if (runtime.ConsumerChannel is { IsOpen: true })
+            return;
+
         IConnection connection = runtime.RequireConnection();
         IChannel channel = await connection.CreateChannelAsync();
         runtime.ConsumerChannel = channel;
 
-        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: 1, global: false);
+        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: settings.PrefetchCount, global: false);
         INameResolver resolver = services.GetRequiredKeyedService<INameResolver>(BrokerId);
         var consumer = new RabbitMQBasicConsumer(
             services,

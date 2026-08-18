@@ -19,14 +19,14 @@ internal sealed class RabbitMqRuntime
     {
         return Connection
             ?? throw new InvalidOperationException(
-                "RabbitMQ connection is not started. Call UseBrokers / UseBrokersAsync first.");
+                "RabbitMQ connection is not started. The host must be started so the broker hosted service can run.");
     }
 
     public ConcurrentObjectPool<IChannel> RequireChannelPool()
     {
         return ChannelPool
             ?? throw new InvalidOperationException(
-                "RabbitMQ channel pool is not started. Call UseBrokers / UseBrokersAsync first.");
+                "RabbitMQ channel pool is not started. The host must be started so the broker hosted service can run.");
     }
 
     public async Task ResetConnectionAsync()

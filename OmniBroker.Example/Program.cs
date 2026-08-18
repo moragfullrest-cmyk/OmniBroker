@@ -53,8 +53,6 @@ if (kafkaSection.GetValue("Enabled", true))
 
 var app = builder.Build();
 
-app.UseBrokers();
-
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {

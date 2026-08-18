@@ -190,6 +190,13 @@ internal sealed class KafkaConsumer : BackgroundService
             _logger.LogInformation("Closing Kafka consumer...");
             _consumer.Close();
             // Do NOT Dispose here — IConsumer is keyed singleton owned by DI
+
+            IProducer<string, byte[]>? producer = _serviceProvider.GetKeyedService<IProducer<string, byte[]>>(_brokerId);
+            if (producer is not null)
+            {
+                producer.Flush(cancellationToken);
+                // Do NOT Dispose here — IProducer is keyed singleton owned by DI
+            }
         }
     }
 }

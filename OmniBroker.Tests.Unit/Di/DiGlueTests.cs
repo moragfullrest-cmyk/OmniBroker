@@ -1,5 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using OmniBroker.Interfaces;
 using OmniBroker.Kafka.Implementations;
 using OmniBroker.Kafka.ServiceSetup;
 using OmniBroker.RabbitMQ;
@@ -362,5 +366,96 @@ public sealed class DiGlueTests
             It.IsAny<bool>(),
             It.IsAny<bool>(),
             It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task RabbitMq_SetupInfrastructure_registers_hosted_service()
+    {
+        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        builder.UseRabbitMq(new RabbitMQSettings
+        {
+            HostName = "localhost",
+            UserName = "guest",
+            Password = "guest"
+        });
+        var extension = (RabbitMQExtension)builder.Extension!;
+        var services = new ServiceCollection();
+
+        await extension.SetupInfrastructure(services, builder);
+
+        services.Any(d => d.ServiceType == typeof(IHostedService)
+            && (d.ImplementationType == typeof(RabbitMqBrokerHostedService)
+                || d.ImplementationFactory is not null)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void AddBroker_rabbitmq_produce_only_registers_hosted_service()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBroker(b =>
+        {
+            b.UseRabbitMq(new RabbitMQSettings
+            {
+                HostName = "localhost",
+                UserName = "guest",
+                Password = "guest"
+            });
+            b.AddProducerFor<TestMessage>();
+        });
+
+        services.Any(d => d.ServiceType == typeof(IHostedService)
+            && (d.ImplementationType == typeof(RabbitMqBrokerHostedService)
+                || d.ImplementationFactory is not null)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task StartConsumers_twice_does_not_create_second_channel_when_open()
+    {
+        var channel = new Mock<IChannel>();
+        SetupChannelLifecycle(channel);
+        channel.SetupGet(c => c.IsOpen).Returns(true);
+        channel.Setup(c => c.BasicQosAsync(
+                It.IsAny<uint>(),
+                It.IsAny<ushort>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        channel.Setup(c => c.BasicConsumeAsync(
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<IAsyncBasicConsumer>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync("tag");
+
+        Mock<IConnection> connection = ConnectionWithChannel(channel);
+        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        builder.UseRabbitMq(new RabbitMQSettings
+        {
+            HostName = "localhost",
+            UserName = "guest",
+            Password = "guest",
+            PrefetchCount = 10
+        });
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(true));
+        var extension = (RabbitMQExtension)builder.Extension!;
+
+        var services = new ServiceCollection();
+        services.AddSingleton<ILogger<RabbitMQBasicConsumer>>(NullLogger<RabbitMQBasicConsumer>.Instance);
+        services.AddKeyedSingleton<INameResolver>(builder.BrokerId, new RabbitMQNameResolver(builder.SetupName));
+        var runtime = new RabbitMqRuntime { Connection = connection.Object };
+        services.AddKeyedSingleton(builder.BrokerId, runtime);
+        await extension.SetupConsumers(services, builder);
+        ServiceProvider provider = services.BuildServiceProvider();
+
+        await extension.StartConsumers(provider, builder);
+        await extension.StartConsumers(provider, builder);
+
+        connection.Verify(
+            c => c.CreateChannelAsync(It.IsAny<CreateChannelOptions>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+        channel.Verify(
+            c => c.BasicQosAsync(0, 10, false, It.IsAny<CancellationToken>()),
+            Times.Once);
     }
 }
