@@ -22,9 +22,8 @@ if (rabbitSection.GetValue("Enabled", true))
     var rabbitSettings = rabbitSection.Get<RabbitMQSettings>()
         ?? throw new InvalidOperationException("Brokers:RabbitMQ is enabled but settings could not be bound from configuration.");
 
-    builder.Services.AddBroker(options =>
+    builder.Services.AddBroker("rabbit", options =>
     {
-        options.SetupName = "Example";
         options.UseRabbitMq(rabbitSettings);
         options.AddProducerFor<ExampleMessage>();
         options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"RabbitMQ received: {m.Text}"); return Task.FromResult(HandleResult.Ack); });
@@ -43,9 +42,8 @@ if (kafkaSection.GetValue("Enabled", true))
     var kafkaSettings = kafkaSection.Get<KafkaSettings>()
         ?? throw new InvalidOperationException("Brokers:Kafka is enabled but settings could not be bound from configuration.");
 
-    builder.Services.AddBroker(options =>
+    builder.Services.AddBroker("kafka", options =>
     {
-        options.SetupName = "Example";
         options.UseKafka(kafkaSettings);
         options.AddProducerFor<ExampleMessage>();
         options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"Kafka received: {m.Text}"); return Task.FromResult(HandleResult.Ack); });

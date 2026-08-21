@@ -28,7 +28,7 @@ public sealed class RabbitMQRpcTests
         ConcurrentDictionary<string, TaskCompletionSource<IMessage>> Pending,
         BrokerOptionsBuilder Builder) CreateCaller(TimeSpan? timeout = null)
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var builder = new BrokerOptionsBuilder { BrokerId = brokerId, SetupName = "rpc-test" };
         builder.UseRabbitMq(Settings(timeout));
         ((RabbitMQExtension)builder.Extension!).ReplyQueueName = "reply-q";
@@ -155,7 +155,7 @@ public sealed class RabbitMQRpcTests
             [(Delegate)(Func<TestMessage, Task<TestReplyMessage?>>)(_ => Task.FromResult<TestReplyMessage?>(null))])!;
 
         await Should.ThrowAsync<InvalidOperationException>(() =>
-            del(new ServiceCollection().BuildServiceProvider(), new TestMessage(), new MessageContext(new BrokerId(), null)));
+            del(new ServiceCollection().BuildServiceProvider(), new TestMessage(), new MessageContext(Guid.NewGuid().ToString(), null)));
     }
 
     [Fact]
@@ -169,7 +169,7 @@ public sealed class RabbitMQRpcTests
             [(Delegate)(Func<TestMessage, Task<TestReplyMessage>>)(_ => Task.FromResult(new TestReplyMessage()))])!;
 
         await Should.ThrowAsync<InvalidOperationException>(() =>
-            del(new ServiceCollection().BuildServiceProvider(), new TestMessage(), new MessageContext(new BrokerId(), null)));
+            del(new ServiceCollection().BuildServiceProvider(), new TestMessage(), new MessageContext(Guid.NewGuid().ToString(), null)));
     }
 
     [Fact]
@@ -182,7 +182,7 @@ public sealed class RabbitMQRpcTests
             null,
             [(Delegate)(Func<TestMessage, Task<TestReplyMessage>>)(_ => Task.FromResult(new TestReplyMessage { Body = [1] }))])!;
 
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var builder = new BrokerOptionsBuilder { BrokerId = brokerId, SetupName = "rpc-test" };
         builder.UseRabbitMq(Settings());
 
@@ -210,7 +210,7 @@ public sealed class RabbitMQRpcTests
     [Fact]
     public async Task Recover_cancels_pending_rpc()
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var builder = new BrokerOptionsBuilder { BrokerId = brokerId, SetupName = "rpc-test" };
         builder.UseRabbitMq(Settings());
         var extension = (RabbitMQExtension)builder.Extension!;

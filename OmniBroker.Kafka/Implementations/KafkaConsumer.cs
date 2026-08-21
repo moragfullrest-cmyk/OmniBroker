@@ -16,12 +16,12 @@ internal sealed class KafkaConsumer : BackgroundService
     private readonly IConsumer<string, byte[]> _consumer;
     private readonly IProducer<string, byte[]>? _producer;
     private readonly ILogger _logger;
-    private readonly BrokerId _brokerId;
+    private readonly string _brokerId;
     private readonly string? _deadLetterTopic;
 
     public KafkaConsumer(
         IServiceProvider serviceProvider,
-        BrokerId id,
+        string id,
         ILogger<KafkaConsumer> logger,
         INameResolver nameResolver,
         KafkaSettings? settings = null)

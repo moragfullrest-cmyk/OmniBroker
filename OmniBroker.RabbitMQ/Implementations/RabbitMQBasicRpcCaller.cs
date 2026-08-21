@@ -16,7 +16,7 @@ internal sealed class RabbitMQBasicRpcCaller<TInputMessage, TOutputMessage> : IR
     private readonly INameResolver _nameResolver;
     private readonly RabbitMQSettings _settings;
 
-    public RabbitMQBasicRpcCaller(IServiceProvider _serviceProvider, BrokerId id)
+    public RabbitMQBasicRpcCaller(IServiceProvider _serviceProvider, string id)
     {
         _builder = _serviceProvider.GetServices<BrokerOptionsBuilder>().First(_ => _.BrokerId == id);
         _producer = _serviceProvider.GetRequiredKeyedService<IProducer<TInputMessage>>(id);

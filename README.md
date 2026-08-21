@@ -39,14 +39,25 @@ Wiring in an application:
 using OmniBroker;
 using OmniBroker.RabbitMQ;
 
-builder.Services.AddBroker(options =>
+builder.Services.AddBroker("orders", options =>
 {
     options.UseRabbitMq(new OmniBroker.RabbitMQ.ServiceSetup.RabbitMQSettings
     {
         // ...
     });
+    options.AddProducerFor<OrderMessage>();
 });
 
 var host = builder.Build();
 host.Run();
 ```
+
+Named brokers use the name as the keyed DI identifier. `SetupName` (queue prefix / Kafka group fallback) defaults to that name and can be overridden **before** `UseRabbitMq` / `UseKafka`.
+
+```csharp
+IProducer<OrderMessage> all; // MultiBrokerProducer: publishes to every broker registered for this type
+[FromKeyedServices("orders")] IProducer<OrderMessage> orders;
+[FromKeyedServices("orders")] IRpcCaller<OrderRequest, OrderReply> rpc;
+```
+
+Unnamed `AddBroker(options => ...)` still works; its key is a generated GUID string. Duplicate names throw.

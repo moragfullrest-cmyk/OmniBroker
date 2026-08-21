@@ -10,10 +10,10 @@ using RabbitMQ.Client;
 
 namespace OmniBroker.RabbitMQ.ServiceSetup;
 
-internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brokerId) : IBrokerExtension
+internal sealed class RabbitMQExtension(RabbitMQSettings settings, string brokerId) : IBrokerExtension
 {
     private readonly HashSet<Type> _replyTypes = [];
-    public BrokerId BrokerId { get; } = brokerId;
+    public string BrokerId { get; } = brokerId;
     public string ReplyQueueName { get; set; } = null!;
     public bool SupportsRpc => true;
 
@@ -61,10 +61,12 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, BrokerId brok
 
         foreach (var t in builder.RpcCallers)
         {
-            services.AddTransient(typeof(IRpcCaller<,>).MakeGenericType(t.Key, t.Value), (s) =>
-            {
-                return Activator.CreateInstance(typeof(RabbitMQBasicRpcCaller<,>).MakeGenericType(t.Key, t.Value), s, builder.BrokerId)!;
-            });
+            Type rpcCallerServiceType = typeof(IRpcCaller<,>).MakeGenericType(t.Key, t.Value);
+            object CreateRpcCaller(IServiceProvider s) =>
+                Activator.CreateInstance(typeof(RabbitMQBasicRpcCaller<,>).MakeGenericType(t.Key, t.Value), s, builder.BrokerId)!;
+
+            services.AddTransient(rpcCallerServiceType, CreateRpcCaller);
+            services.AddKeyedTransient(rpcCallerServiceType, BrokerId, (s, _) => CreateRpcCaller(s));
             services.AddKeyedScoped(typeof(IProducer<>).MakeGenericType(t.Key), BrokerId, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(t.Key);

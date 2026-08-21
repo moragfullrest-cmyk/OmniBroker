@@ -1,5 +1,4 @@
 using Microsoft.Extensions.DependencyInjection;
-using OmniBroker.Infrastructure;
 
 namespace OmniBroker;
 
@@ -9,9 +8,9 @@ namespace OmniBroker;
 public interface IBrokerExtension
 {
     /// <summary>
-    /// Broker instance identifier
+    /// Broker instance identifier used as the keyed DI key
     /// </summary>
-    BrokerId BrokerId { get; }
+    string BrokerId { get; }
 
     /// <summary>
     /// Whether the transport supports RPC

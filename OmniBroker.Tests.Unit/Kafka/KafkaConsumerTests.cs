@@ -35,7 +35,7 @@ public sealed class KafkaConsumerTests
             Mock<IProducer<string, byte[]>>? producer = null,
             KafkaSettings? settings = null)
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var kafka = new Mock<IConsumer<string, byte[]>>();
         var committed = new List<ConsumeResult<string, byte[]>>();
         kafka.Setup(c => c.Commit(It.IsAny<ConsumeResult<string, byte[]>>()))

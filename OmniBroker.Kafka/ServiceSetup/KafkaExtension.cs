@@ -8,9 +8,9 @@ using OmniBroker.Kafka.Implementations;
 
 namespace OmniBroker.Kafka.ServiceSetup;
 
-internal sealed class KafkaExtension(KafkaSettings settings, BrokerId brokerId) : IBrokerExtension
+internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : IBrokerExtension
 {
-    public BrokerId BrokerId { get; } = brokerId;
+    public string BrokerId { get; } = brokerId;
     public bool SupportsRpc => false;
 
     public Task SetupConsumers(IServiceCollection services, BrokerOptionsBuilder builder)

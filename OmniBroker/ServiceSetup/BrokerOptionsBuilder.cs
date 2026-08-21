@@ -24,5 +24,5 @@ public sealed class BrokerOptionsBuilder
     /// </summary>
     public INameResolver? NameResolver { get; set; }
 
-    internal BrokerId BrokerId { get; set; } = new BrokerId();
+    internal string BrokerId { get; set; } = Guid.NewGuid().ToString();
 }

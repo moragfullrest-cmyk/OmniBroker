@@ -22,11 +22,11 @@ public sealed class RabbitMQBasicConsumerTests
         DeadLetterExchange = deadLetterExchange
     };
 
-    private static (RabbitMQBasicConsumer Consumer, Mock<IChannel> Channel, BrokerId BrokerId) CreateConsumer(
-        Action<IServiceCollection, BrokerId>? configureServices = null,
+    private static (RabbitMQBasicConsumer Consumer, Mock<IChannel> Channel, string BrokerId) CreateConsumer(
+        Action<IServiceCollection, string>? configureServices = null,
         string? deadLetterExchange = null)
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var channel = new Mock<IChannel>();
         channel.Setup(c => c.BasicAckAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .Returns(ValueTask.CompletedTask);
@@ -152,7 +152,7 @@ public sealed class RabbitMQBasicConsumerTests
     [Fact]
     public async Task ChannelShutdown_suppress_skips_recover()
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var channel = new Mock<IChannel>();
         var runtime = new RabbitMqRuntime
         {
@@ -182,7 +182,7 @@ public sealed class RabbitMQBasicConsumerTests
     [Fact]
     public async Task ChannelShutdown_stale_channel_skips_recover()
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var channel = new Mock<IChannel>();
         var other = new Mock<IChannel>();
         var runtime = new RabbitMqRuntime { ConsumerChannel = other.Object };
@@ -205,7 +205,7 @@ public sealed class RabbitMQBasicConsumerTests
     [Fact]
     public async Task ChannelShutdown_missing_builder_skips_recover()
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var channel = new Mock<IChannel>();
         var runtime = new RabbitMqRuntime { ConsumerChannel = channel.Object };
 

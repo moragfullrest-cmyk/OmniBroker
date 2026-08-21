@@ -27,7 +27,7 @@ public sealed class HandlerWrapperTests
     [Fact]
     public async Task WrapActionDelegate_resolves_unkeyed_and_keyed_dependencies()
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var services = new ServiceCollection();
         services.AddKeyedSingleton(brokerId, new TestDependency { Value = "broker-keyed" });
         services.AddKeyedSingleton("explicit-key", new TestDependency { Value = "explicit" });
@@ -43,7 +43,7 @@ public sealed class HandlerWrapperTests
                 });
 
         // FromKeyedServices is only used when soft lookup by CurrentBrokerId returns null.
-        var otherBrokerId = new BrokerId();
+        var otherBrokerId = Guid.NewGuid().ToString();
         Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> fromKeyed =
             BrokerExtensions.WrapActionDelegate<HandleResult>(
                 ([FromKeyedServices("explicit-key")] TestDependency dep, TestMessage message) =>
@@ -59,7 +59,7 @@ public sealed class HandlerWrapperTests
     [Fact]
     public async Task WrapActionDelegate_falls_back_to_unkeyed_when_broker_key_missing()
     {
-        var brokerId = new BrokerId();
+        var brokerId = Guid.NewGuid().ToString();
         var services = new ServiceCollection();
         services.AddSingleton(new TestDependency { Value = "unkeyed" });
         ServiceProvider provider = services.BuildServiceProvider();
@@ -92,7 +92,7 @@ public sealed class HandlerWrapperTests
         HandleResult result = await wrapped(
             new ServiceCollection().BuildServiceProvider(),
             new TestMessage(),
-            new MessageContext(new BrokerId(), null, cts.Token));
+            new MessageContext(Guid.NewGuid().ToString(), null, cts.Token));
 
         result.ShouldBe(HandleResult.Ack);
     }

@@ -14,13 +14,13 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
     private readonly IChannel _channel;
     private readonly Dictionary<string, HandlerWrapper> _handlers;
     private readonly ILogger<RabbitMQBasicConsumer> _logger;
-    private readonly BrokerId _brokerId;
+    private readonly string _brokerId;
     private readonly RabbitMQSettings _settings;
 
     public RabbitMQBasicConsumer(
         IServiceProvider serviceProvider,
         IChannel channel,
-        BrokerId id,
+        string id,
         ILogger<RabbitMQBasicConsumer> logger) : base(channel)
     {
         _serviceProvider = serviceProvider;
@@ -128,7 +128,7 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
 
             if (builder is null)
             {
-                _logger.LogError("Cannot recover RabbitMQ: BrokerOptionsBuilder for {BrokerId} was not found.", _brokerId.Id);
+                _logger.LogError("Cannot recover RabbitMQ: BrokerOptionsBuilder for {BrokerId} was not found.", _brokerId);
                 return;
             }
 

@@ -1,10 +1,9 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using OmniBroker.Infrastructure;
 
 namespace OmniBroker.RabbitMQ.ServiceSetup;
 
-internal sealed class RabbitMqBrokerHostedService(IServiceProvider services, BrokerId brokerId) : IHostedService
+internal sealed class RabbitMqBrokerHostedService(IServiceProvider services, string brokerId) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {

@@ -11,7 +11,7 @@ public sealed class MultiBrokerProducerTests
 {
     private static MultiBrokerProducer<TestMessage> Create(params IProducer<TestMessage>[] producers)
     {
-        var brokerIds = producers.Select(_ => new BrokerId()).ToArray();
+        var brokerIds = producers.Select(_ => Guid.NewGuid().ToString()).ToArray();
         var builders = brokerIds.Select(id =>
         {
             var builder = new BrokerOptionsBuilder();
@@ -26,7 +26,7 @@ public sealed class MultiBrokerProducerTests
         for (int i = 0; i < producers.Length; i++)
         {
             IProducer<TestMessage> producer = producers[i];
-            BrokerId id = brokerIds[i];
+            string id = brokerIds[i];
             services.AddKeyedSingleton(id, producer);
         }
 
@@ -100,8 +100,8 @@ public sealed class MultiBrokerProducerTests
             .ReturnsAsync(false);
         var logger = new Mock<ILogger<MultiBrokerProducer<TestMessage>>>();
 
-        var firstId = new BrokerId();
-        var secondId = new BrokerId();
+        var firstId = Guid.NewGuid().ToString();
+        var secondId = Guid.NewGuid().ToString();
         var firstBuilder = new BrokerOptionsBuilder { BrokerId = firstId };
         var secondBuilder = new BrokerOptionsBuilder { BrokerId = secondId };
 

@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using OmniBroker.Infrastructure;
+using OmniBroker.Interfaces;
 using OmniBroker.Kafka.ServiceSetup;
 using OmniBroker.RabbitMQ;
 using OmniBroker.RabbitMQ.ServiceSetup;
@@ -177,7 +178,7 @@ public sealed class BrokerExtensionsTests
 
         services.Any(d => d.ServiceType == typeof(IProducer<TestMessage>)).ShouldBeTrue();
         services.Any(d => d.ServiceType == typeof(BrokerOptionsBuilder)).ShouldBeTrue();
-        services.Any(d => d.IsKeyedService && d.ServiceKey is BrokerId && d.ServiceType == typeof(HandlerWrapper))
+        services.Any(d => d.IsKeyedService && d.ServiceKey is string && d.ServiceType == typeof(HandlerWrapper))
             .ShouldBeTrue();
     }
 
@@ -203,5 +204,102 @@ public sealed class BrokerExtensionsTests
 
         services.Count(d => d.IsKeyedService && d.ServiceType == typeof(IProducer<TestMessage>)).ShouldBe(2);
         services.Count(d => d.ServiceType == typeof(BrokerOptionsBuilder) && !d.IsKeyedService).ShouldBe(2);
+    }
+
+    [Fact]
+    public void AddBroker_named_registers_keyed_producer()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBroker("orders", b =>
+        {
+            b.UseRabbitMq(RabbitSettings());
+            b.AddProducerFor<TestMessage>();
+        });
+
+        services.Any(d => d.IsKeyedService && Equals(d.ServiceKey, "orders") && d.ServiceType == typeof(IProducer<TestMessage>))
+            .ShouldBeTrue();
+        services.Any(d => d.IsKeyedService && Equals(d.ServiceKey, "orders") && d.ServiceType == typeof(BrokerOptionsBuilder))
+            .ShouldBeTrue();
+    }
+
+    [Fact]
+    public void AddBroker_two_named_brokers_register_distinct_keys()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBroker("orders", b =>
+        {
+            b.UseRabbitMq(RabbitSettings());
+            b.AddProducerFor<TestMessage>();
+        });
+        services.AddBroker("payments", b =>
+        {
+            b.UseKafka(KafkaSettings());
+            b.AddProducerFor<TestMessage>();
+        });
+
+        services.Count(d => d.IsKeyedService && d.ServiceType == typeof(IProducer<TestMessage>)).ShouldBe(2);
+        services.Any(d => d.IsKeyedService && Equals(d.ServiceKey, "orders") && d.ServiceType == typeof(IProducer<TestMessage>))
+            .ShouldBeTrue();
+        services.Any(d => d.IsKeyedService && Equals(d.ServiceKey, "payments") && d.ServiceType == typeof(IProducer<TestMessage>))
+            .ShouldBeTrue();
+
+        var unkeyed = services.Where(d => d.ServiceType == typeof(IProducer<TestMessage>) && !d.IsKeyedService).ToList();
+        unkeyed.ShouldNotBeEmpty();
+        unkeyed.ShouldAllBe(d => d.ImplementationType == typeof(MultiBrokerProducer<TestMessage>));
+    }
+
+    [Fact]
+    public void AddBroker_duplicate_name_throws()
+    {
+        var services = new ServiceCollection();
+        services.AddBroker("orders", b => b.UseRabbitMq(RabbitSettings()));
+
+        Should.Throw<ArgumentException>(() => services.AddBroker("orders", b => b.UseKafka(KafkaSettings())));
+    }
+
+    [Fact]
+    public void AddBroker_empty_name_throws()
+    {
+        var services = new ServiceCollection();
+
+        Should.Throw<ArgumentException>(() => services.AddBroker("", b => b.UseRabbitMq(RabbitSettings())));
+        Should.Throw<ArgumentException>(() => services.AddBroker("  ", b => b.UseRabbitMq(RabbitSettings())));
+    }
+
+    [Fact]
+    public void AddBroker_unnamed_uses_string_guid_key()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBroker(b =>
+        {
+            b.UseRabbitMq(RabbitSettings());
+            b.AddProducerFor<TestMessage>();
+        });
+
+        ServiceDescriptor keyed = services.Single(d => d.IsKeyedService && d.ServiceType == typeof(IProducer<TestMessage>));
+        keyed.ServiceKey.ShouldBeOfType<string>();
+        Guid.TryParse((string)keyed.ServiceKey!, out _).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void AddBroker_named_registers_keyed_rpc_caller()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBroker("orders", b =>
+        {
+            b.UseRabbitMq(RabbitSettings());
+            b.AddRpcCaller<TestMessage, TestReplyMessage>();
+        });
+
+        services.Any(d => d.IsKeyedService
+            && Equals(d.ServiceKey, "orders")
+            && d.ServiceType == typeof(IRpcCaller<TestMessage, TestReplyMessage>))
+            .ShouldBeTrue();
+        services.Any(d => !d.IsKeyedService && d.ServiceType == typeof(IRpcCaller<TestMessage, TestReplyMessage>))
+            .ShouldBeTrue();
     }
 }

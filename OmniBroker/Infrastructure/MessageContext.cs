@@ -3,6 +3,6 @@ using OmniBroker.Interfaces;
 namespace OmniBroker.Infrastructure;
 
 internal sealed record MessageContext(
-    BrokerId CurrentBrokerId,
+    string CurrentBrokerId,
     IReplyInfo? ReplyInfo,
     CancellationToken CancellationToken = default);

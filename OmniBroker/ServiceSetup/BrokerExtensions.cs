@@ -11,13 +11,38 @@ public static class BrokerExtensions
     /// Entry point for broker configuration
     /// </summary>
     public static IServiceCollection AddBroker(this IServiceCollection services, Action<BrokerOptionsBuilder> optionsAction)
+        => AddBrokerCore(services, name: null, optionsAction);
+
+    /// <summary>
+    /// Entry point for named broker configuration. The name is the keyed DI identifier.
+    /// </summary>
+    /// <param name="name">Broker name used as the <c>[FromKeyedServices]</c> key.</param>
+    public static IServiceCollection AddBroker(this IServiceCollection services, string name, Action<BrokerOptionsBuilder> optionsAction)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return AddBrokerCore(services, name, optionsAction);
+    }
+
+    private static IServiceCollection AddBrokerCore(IServiceCollection services, string? name, Action<BrokerOptionsBuilder> optionsAction)
     {
         ArgumentNullException.ThrowIfNull(optionsAction);
 
         var options = new BrokerOptionsBuilder();
+        if (name is not null)
+        {
+            options.BrokerId = name;
+            options.SetupName = name;
+        }
+
         optionsAction(options);
 
         ArgumentNullException.ThrowIfNull(options.Extension);
+
+        if (string.IsNullOrWhiteSpace(options.BrokerId))
+            throw new ArgumentException("Broker identifier cannot be empty or whitespace.");
+
+        if (services.Any(d => d.IsKeyedService && d.ServiceKey is string key && key == options.BrokerId && d.ServiceType == typeof(BrokerOptionsBuilder)))
+            throw new ArgumentException($"Broker '{options.BrokerId}' is already registered.");
 
         if ((options.RpcCallers.Count > 0 || options.RpcReceivers.Count > 0) && !options.Extension.SupportsRpc)
         {
