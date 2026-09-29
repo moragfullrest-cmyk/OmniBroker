@@ -125,6 +125,71 @@ public sealed class KafkaConsumerTests
     }
 
     [Fact]
+    public async Task Handler_receives_message_key_as_tag()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        string? capturedTag = null;
+        (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, message, _) =>
+                {
+                    capturedTag = message.Tag;
+                    return Task.FromResult(HandleResult.Ack);
+                }
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result(nameof(TestMessage), [1], key: "orders.created");
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            });
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        capturedTag.ShouldBe("orders.created");
+        committed.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Handler_receives_empty_tag_when_key_is_null()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        string? capturedTag = null;
+        (KafkaConsumer consumer, _, _) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, message, _) =>
+                {
+                    capturedTag = message.Tag;
+                    return Task.FromResult(HandleResult.Ack);
+                }
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result(nameof(TestMessage), [1], key: null);
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            });
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        capturedTag.ShouldBe("");
+    }
+
+    [Fact]
     public async Task Handler_false_still_commits()
     {
         using var cts = new CancellationTokenSource();

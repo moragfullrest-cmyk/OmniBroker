@@ -129,6 +129,52 @@ public sealed class RabbitMQBasicConsumerTests
     }
 
     [Fact]
+    public async Task Deliver_sets_tag_from_routing_key()
+    {
+        string? capturedTag = null;
+        (RabbitMQBasicConsumer consumer, Mock<IChannel> channel, _) = CreateConsumer(
+            configureServices: (services, id) =>
+            {
+                services.AddKeyedSingleton(id, Wrapper((_, message, _) =>
+                {
+                    capturedTag = message.Tag;
+                    return Task.FromResult(HandleResult.Ack);
+                }));
+            });
+
+        await consumer.HandleBasicDeliverAsync(
+            "ct",
+            9,
+            false,
+            nameof(TestMessage),
+            "orders.created",
+            Props(),
+            new byte[] { 1 });
+
+        capturedTag.ShouldBe("orders.created");
+        channel.Verify(c => c.BasicAckAsync(9, false, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Deliver_empty_routing_key_sets_empty_tag()
+    {
+        string? capturedTag = null;
+        (RabbitMQBasicConsumer consumer, _, _) = CreateConsumer(
+            configureServices: (services, id) =>
+            {
+                services.AddKeyedSingleton(id, Wrapper((_, message, _) =>
+                {
+                    capturedTag = message.Tag;
+                    return Task.FromResult(HandleResult.Ack);
+                }));
+            });
+
+        await consumer.HandleBasicDeliverAsync("ct", 10, false, nameof(TestMessage), "", Props(), new byte[] { 1 });
+
+        capturedTag.ShouldBe("");
+    }
+
+    [Fact]
     public async Task Deliver_fills_ReplyInfo()
     {
         RabbitMQReplyInfo? captured = null;

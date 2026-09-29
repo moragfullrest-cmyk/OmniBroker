@@ -77,6 +77,7 @@ internal sealed class KafkaConsumer : BackgroundService
                 IMessage message = handler.CreateMessage();
                 message.Body = receivedMessage.Message.Value;
                 message.CorrelationId = ReadCorrelationId(receivedMessage.Message.Headers) ?? message.CorrelationId;
+                message.Tag = receivedMessage.Message.Key ?? "";
 
                 var context = new MessageContext(
                     CurrentBrokerId: _brokerId,

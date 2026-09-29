@@ -59,6 +59,7 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
             IMessage message = handler.CreateMessage();
             message.Body = body.ToArray();
             message.CorrelationId = properties.CorrelationId;
+            message.Tag = routingKey;
             var context = new MessageContext(
                 CurrentBrokerId: _brokerId,
                 ReplyInfo: new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo },
