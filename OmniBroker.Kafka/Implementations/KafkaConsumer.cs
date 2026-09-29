@@ -86,8 +86,9 @@ internal sealed class KafkaConsumer : BackgroundService
                 HandleResult result = HandleResult.Ack;
                 foreach (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> handlerDelegate in handler.Handlers)
                 {
-                    if (await handlerDelegate(scope.ServiceProvider, message, context) == HandleResult.Retry)
-                        result = HandleResult.Retry;
+                    result = await handlerDelegate(scope.ServiceProvider, message, context);
+                    if (result == HandleResult.Retry)
+                        break;
                 }
 
                 if (result == HandleResult.Retry)

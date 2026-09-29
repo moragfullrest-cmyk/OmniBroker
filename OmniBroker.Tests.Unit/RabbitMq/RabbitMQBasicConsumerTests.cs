@@ -86,6 +86,42 @@ public sealed class RabbitMQBasicConsumerTests
     }
 
     [Fact]
+    public async Task Deliver_retry_skips_later_handlers_and_nacks()
+    {
+        int calls = 0;
+        (RabbitMQBasicConsumer consumer, Mock<IChannel> channel, _) = CreateConsumer(
+            configureServices: (services, id) =>
+            {
+                services.AddKeyedSingleton(id, new HandlerWrapper(
+                    typeof(TestMessage),
+                    [
+                        (_, _, _) =>
+                        {
+                            calls++;
+                            return Task.FromResult(HandleResult.Ack);
+                        },
+                        (_, _, _) =>
+                        {
+                            calls++;
+                            return Task.FromResult(HandleResult.Retry);
+                        },
+                        (_, _, _) =>
+                        {
+                            calls++;
+                            return Task.FromResult(HandleResult.Ack);
+                        }
+                    ],
+                    HandlerWrapper.BuildCreateMessage(typeof(TestMessage))));
+            });
+
+        await consumer.HandleBasicDeliverAsync("ct", 11, false, nameof(TestMessage), "rk", Props(), new byte[] { 1 });
+
+        calls.ShouldBe(2);
+        channel.Verify(c => c.BasicNackAsync(11, false, true, It.IsAny<CancellationToken>()), Times.Once);
+        channel.Verify(c => c.BasicAckAsync(It.IsAny<ulong>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Deliver_handler_false_nacks()
     {
         (RabbitMQBasicConsumer consumer, Mock<IChannel> channel, _) = CreateConsumer(

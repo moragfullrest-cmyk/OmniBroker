@@ -67,8 +67,9 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
             HandleResult result = HandleResult.Ack;
             foreach (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> _delegate in handler.Handlers)
             {
-                if (await _delegate(scope.ServiceProvider, message, context) == HandleResult.Retry)
-                    result = HandleResult.Retry;
+                result = await _delegate(scope.ServiceProvider, message, context);
+                if (result == HandleResult.Retry)
+                    break;
             }
 
             if (result == HandleResult.Ack)

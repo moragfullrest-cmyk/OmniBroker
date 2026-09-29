@@ -190,6 +190,49 @@ public sealed class KafkaConsumerTests
     }
 
     [Fact]
+    public async Task Handler_retry_skips_later_handlers_and_commits()
+    {
+        using var cts = new CancellationTokenSource();
+        int consumeCalls = 0;
+        int handlerCalls = 0;
+        (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, _, _) =>
+                {
+                    handlerCalls++;
+                    return Task.FromResult(HandleResult.Ack);
+                },
+                (_, _, _) =>
+                {
+                    handlerCalls++;
+                    return Task.FromResult(HandleResult.Retry);
+                },
+                (_, _, _) =>
+                {
+                    handlerCalls++;
+                    return Task.FromResult(HandleResult.Ack);
+                }
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref consumeCalls) == 1)
+                            return Result(nameof(TestMessage), [1]);
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            });
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        handlerCalls.ShouldBe(2);
+        committed.Count.ShouldBe(1);
+    }
+
+    [Fact]
     public async Task Handler_false_still_commits()
     {
         using var cts = new CancellationTokenSource();
