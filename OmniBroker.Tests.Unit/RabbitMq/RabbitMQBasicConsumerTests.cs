@@ -196,6 +196,31 @@ public sealed class RabbitMQBasicConsumerTests
     }
 
     [Fact]
+    public async Task ChannelShutdown_while_stopping_skips_recover()
+    {
+        var brokerId = Guid.NewGuid().ToString();
+        var channel = new Mock<IChannel>();
+        var runtime = new RabbitMqRuntime { ConsumerChannel = channel.Object };
+        runtime.SignalStop();
+
+        var services = new ServiceCollection();
+        services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver("svc"));
+        services.AddKeyedSingleton(brokerId, Settings());
+        services.AddKeyedSingleton(brokerId, runtime);
+        ServiceProvider provider = services.BuildServiceProvider();
+
+        var consumer = new RabbitMQBasicConsumer(
+            provider,
+            channel.Object,
+            brokerId,
+            NullLogger<RabbitMQBasicConsumer>.Instance);
+
+        await consumer.HandleChannelShutdownAsync(channel.Object, new ShutdownEventArgs(ShutdownInitiator.Application, 200, "stop"));
+
+        runtime.Connection.ShouldBeNull();
+    }
+
+    [Fact]
     public async Task ChannelShutdown_suppress_skips_recover()
     {
         var brokerId = Guid.NewGuid().ToString();

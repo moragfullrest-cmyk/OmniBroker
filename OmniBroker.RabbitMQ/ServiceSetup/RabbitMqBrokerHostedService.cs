@@ -13,9 +13,10 @@ internal sealed class RabbitMqBrokerHostedService(IServiceProvider services, str
         await extension.StartConsumers(services, builder);
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
         RabbitMqRuntime runtime = services.GetRequiredKeyedService<RabbitMqRuntime>(brokerId);
-        return runtime.ResetConnectionAsync();
+        runtime.SignalStop();
+        await runtime.ResetConnectionAsync(cancellationToken);
     }
 }

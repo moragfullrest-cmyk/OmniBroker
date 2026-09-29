@@ -111,6 +111,12 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
         {
             RabbitMqRuntime runtime = _serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(_brokerId);
 
+            if (runtime.StoppingToken.IsCancellationRequested)
+            {
+                _logger.LogDebug("Skipping recover: broker host is stopping.");
+                return;
+            }
+
             if (runtime.SuppressConsumerShutdownRecover)
             {
                 _logger.LogDebug("Skipping recover: consumer shutdown suppressed during connection reset.");

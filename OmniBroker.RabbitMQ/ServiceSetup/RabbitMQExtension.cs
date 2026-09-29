@@ -185,6 +185,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
     public async Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     {
         RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+        runtime.StoppingToken.ThrowIfCancellationRequested();
 
         if (runtime.Connection is null)
         {
@@ -206,7 +207,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
                 };
             }
 
-            runtime.Connection = await factory.CreateConnectionAsync();
+            runtime.Connection = await factory.CreateConnectionAsync(runtime.StoppingToken);
         }
 
         if (runtime.ChannelPool is null)
@@ -226,55 +227,97 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
     /// <summary>
     /// Reconnects and redeclares topology. The exclusive server-named RPC reply queue is renamed on recover;
     /// in-flight RPC calls are cancelled via <see cref="CancelPendingRpc"/>.
+    /// Observes <see cref="RabbitMqRuntime.StoppingToken"/> and shares <see cref="RabbitMqRuntime.ReconnectLock"/>
+    /// with connection reset so host shutdown is not blocked by the retry loop.
     /// </summary>
     internal async Task RecoverAsync(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     {
         RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
-        await runtime.ReconnectLock.WaitAsync();
+        CancellationToken cancellationToken = runtime.StoppingToken;
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
+        bool acquired = false;
         try
         {
-            if (runtime.Connection is { IsOpen: true } && runtime.ConsumerChannel is { IsOpen: true })
-            {
+            await runtime.ReconnectLock.WaitAsync(cancellationToken);
+            acquired = true;
+
+            if (cancellationToken.IsCancellationRequested)
                 return;
-            }
+
+            if (runtime.Connection is { IsOpen: true } && runtime.ConsumerChannel is { IsOpen: true })
+                return;
 
             CancelPendingRpc(serviceProvider);
-            await runtime.ResetConnectionAsync();
-
-            ILogger logger = serviceProvider.GetService<ILogger<RabbitMQExtension>>()
-                ?? NullLogger<RabbitMQExtension>.Instance;
-            int delaySeconds = 1;
-            const int capSeconds = 30;
-            while (true)
-            {
-                try
-                {
-                    await StartInfrastructure(serviceProvider, builder);
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(
-                        ex,
-                        "RabbitMQ recover failed to start infrastructure; retrying in {DelaySeconds}s",
-                        delaySeconds);
-                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
-                    delaySeconds = delaySeconds switch
-                    {
-                        1 => 5,
-                        5 => 15,
-                        _ => capSeconds
-                    };
-                }
-            }
-
-            await StartConsumers(serviceProvider, builder);
+            await runtime.ResetConnectionCoreAsync();
+            await RetryStartAsync(serviceProvider, builder, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         finally
         {
-            runtime.SuppressConsumerShutdownRecover = false;
-            runtime.ReconnectLock.Release();
+            if (acquired)
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                    runtime.SuppressConsumerShutdownRecover = false;
+                runtime.ReconnectLock.Release();
+            }
         }
+    }
+
+    internal async Task RetryStartAsync(
+        IServiceProvider serviceProvider,
+        BrokerOptionsBuilder builder,
+        CancellationToken cancellationToken)
+    {
+        ILogger logger = serviceProvider.GetService<ILogger<RabbitMQExtension>>()
+            ?? NullLogger<RabbitMQExtension>.Instance;
+        int delaySeconds = 1;
+        const int capSeconds = 30;
+        while (true)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return;
+
+            try
+            {
+                await StartInfrastructure(serviceProvider, builder);
+                break;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "RabbitMQ recover failed to start infrastructure; retrying in {DelaySeconds}s",
+                    delaySeconds);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                delaySeconds = delaySeconds switch
+                {
+                    1 => 5,
+                    5 => 15,
+                    _ => capSeconds
+                };
+            }
+        }
+
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
+        await StartConsumers(serviceProvider, builder);
     }
 
     private void CancelPendingRpc(IServiceProvider serviceProvider)

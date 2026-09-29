@@ -4,10 +4,22 @@ namespace OmniBroker.RabbitMQ.ServiceSetup;
 
 internal sealed class RabbitMqRuntime
 {
+    private readonly CancellationTokenSource _stopping = new();
+
     public IConnection? Connection { get; set; }
     public ConcurrentObjectPool<IChannel>? ChannelPool { get; set; }
     public IChannel? ConsumerChannel { get; set; }
     public SemaphoreSlim ReconnectLock { get; } = new(1, 1);
+
+    /// <summary>
+    /// Cancelled when the broker hosted service stops. Recover observes this token.
+    /// </summary>
+    public CancellationToken StoppingToken => _stopping.Token;
+
+    /// <summary>
+    /// Signal that the host is stopping so an in-flight recover releases <see cref="ReconnectLock"/>.
+    /// </summary>
+    public void SignalStop() => _stopping.Cancel();
 
     /// <summary>
     /// When true, consumer channel shutdown callbacks must not trigger recover
@@ -29,7 +41,20 @@ internal sealed class RabbitMqRuntime
                 "RabbitMQ channel pool is not started. The host must be started so the broker hosted service can run.");
     }
 
-    public async Task ResetConnectionAsync()
+    public async Task ResetConnectionAsync(CancellationToken cancellationToken = default)
+    {
+        await ReconnectLock.WaitAsync(cancellationToken);
+        try
+        {
+            await ResetConnectionCoreAsync();
+        }
+        finally
+        {
+            ReconnectLock.Release();
+        }
+    }
+
+    internal async Task ResetConnectionCoreAsync()
     {
         SuppressConsumerShutdownRecover = true;
 
