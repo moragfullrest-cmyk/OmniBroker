@@ -49,6 +49,7 @@ public sealed class KafkaSettings
 
     /// <summary>
     /// Optional dead-letter topic. When set, failed handler results are produced here before the original offset is committed.
+    /// If that produce fails, the offset stays uncommitted and the consumer seeks back to retry the record.
     /// </summary>
     public string? DeadLetterTopic { get; init; }
 }

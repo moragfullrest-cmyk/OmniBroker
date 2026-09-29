@@ -19,6 +19,11 @@ internal sealed class KafkaConsumer : BackgroundService
     private readonly string _brokerId;
     private readonly string? _deadLetterTopic;
 
+    /// <summary>
+    /// Pause after a failed dead-letter publish before the same record is consumed again.
+    /// </summary>
+    internal TimeSpan DeadLetterRetryDelay { get; set; } = TimeSpan.FromSeconds(1);
+
     public KafkaConsumer(
         IServiceProvider serviceProvider,
         string id,
@@ -57,7 +62,7 @@ internal sealed class KafkaConsumer : BackgroundService
                 receivedMessage = _consumer.Consume(stoppingToken);
                 if (receivedMessage is null)
                     continue;
-                if (receivedMessage.Message?.Value == null || receivedMessage.Message.Value.Length == 0)
+                if (receivedMessage.Message?.Value == null)
                 {
                     _consumer.Commit(receivedMessage);
                     continue;
@@ -94,10 +99,14 @@ internal sealed class KafkaConsumer : BackgroundService
                 if (result == HandleResult.Retry)
                 {
                     _logger.LogWarning(
-                        "Handler returned Retry; committing and skipping. Topic={Topic}, Offset={Offset}",
+                        "Handler returned Retry. Topic={Topic}, Offset={Offset}",
                         receivedMessage.Topic,
                         receivedMessage.Offset);
-                    await TryPublishDeadLetterAsync(receivedMessage, "Handler returned Retry", stoppingToken);
+                    if (!await TryPublishDeadLetterAsync(receivedMessage, "Handler returned Retry", stoppingToken))
+                    {
+                        await HoldForRedeliveryAsync(receivedMessage, stoppingToken);
+                        continue;
+                    }
                 }
 
                 _consumer.Commit(receivedMessage);
@@ -115,27 +124,37 @@ internal sealed class KafkaConsumer : BackgroundService
                 _logger.LogError(ex, "Unexpected error processing Kafka message");
                 if (receivedMessage is not null)
                 {
-                    await TryPublishDeadLetterAsync(receivedMessage, ex.Message, stoppingToken);
-                    try
+                    if (!await TryPublishDeadLetterAsync(receivedMessage, ex.Message, stoppingToken))
                     {
-                        _consumer.Commit(receivedMessage);
+                        await HoldForRedeliveryAsync(receivedMessage, stoppingToken);
                     }
-                    catch (Exception commitEx)
+                    else
                     {
-                        _logger.LogError(commitEx, "Failed to commit Kafka offset after handler error");
+                        try
+                        {
+                            _consumer.Commit(receivedMessage);
+                        }
+                        catch (Exception commitEx)
+                        {
+                            _logger.LogError(commitEx, "Failed to commit Kafka offset after handler error");
+                        }
                     }
                 }
             }
         }
     }
 
-    private async Task TryPublishDeadLetterAsync(
+    /// <summary>
+    /// Publishes to the dead-letter topic when one is configured.
+    /// Returns false only when a dead-letter topic is set and the produce fails, so the caller can leave the offset uncommitted.
+    /// </summary>
+    private async Task<bool> TryPublishDeadLetterAsync(
         ConsumeResult<string, byte[]> receivedMessage,
         string? reason,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_deadLetterTopic) || _producer is null)
-            return;
+            return true;
 
         try
         {
@@ -160,6 +179,7 @@ internal sealed class KafkaConsumer : BackgroundService
                     Headers = headers
                 },
                 cancellationToken);
+            return true;
         }
         catch (Exception ex)
         {
@@ -167,6 +187,35 @@ internal sealed class KafkaConsumer : BackgroundService
                 ex,
                 "Failed to publish Kafka message to dead-letter topic {DeadLetterTopic}",
                 _deadLetterTopic);
+            return false;
+        }
+    }
+
+    private async Task HoldForRedeliveryAsync(ConsumeResult<string, byte[]> receivedMessage, CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "Dead-letter publish failed; leaving offset uncommitted. Topic={Topic}, Offset={Offset}",
+            receivedMessage.Topic,
+            receivedMessage.Offset);
+        try
+        {
+            _consumer.Seek(receivedMessage.TopicPartitionOffset);
+        }
+        catch (Exception seekEx)
+        {
+            _logger.LogError(
+                seekEx,
+                "Failed to seek Kafka consumer back to offset {Offset} on {Topic}",
+                receivedMessage.Offset,
+                receivedMessage.Topic);
+        }
+
+        try
+        {
+            await Task.Delay(DeadLetterRetryDelay, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
     }
 

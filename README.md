@@ -24,7 +24,7 @@ Handlers must return `Task<HandleResult>`: `Ack` to confirm, `Retry` to request 
 
 Retry and dead-letter:
 
-- Kafka `Retry` (and handler exception): the offset is always committed. If `KafkaSettings.DeadLetterTopic` is set, the message is produced to that topic first; a Produce failure still commits the original offset.
+- Kafka `Retry` (and handler exception): if `KafkaSettings.DeadLetterTopic` is set, the message is produced there before the original offset is committed. A Produce failure leaves the offset uncommitted and seeks back so the record is retried. If the dead-letter topic is not set, the offset is still committed. A null record value is a tombstone and is committed without invoking handlers; an empty payload is delivered to the handler.
 - RabbitMQ `Retry` (and handler exception): if `RabbitMQSettings.DeadLetterExchange` is empty, the message is nacked with `requeue: true` (poison-loop risk). If it is set, broker DLX/DLQ topology is used and the message is nacked with `requeue: false`.
 
 RabbitMQ topology notes:

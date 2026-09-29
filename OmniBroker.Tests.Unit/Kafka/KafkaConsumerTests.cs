@@ -69,12 +69,46 @@ public sealed class KafkaConsumerTests
         };
 
     [Fact]
-    public async Task Empty_body_commits_without_handlers()
+    public async Task Empty_body_is_delivered_to_handler()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        byte[]? capturedBody = null;
+        (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, message, _) =>
+                {
+                    capturedBody = message.Body;
+                    return Task.FromResult(HandleResult.Ack);
+                }
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result(nameof(TestMessage), []);
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            });
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        capturedBody.ShouldNotBeNull();
+        capturedBody!.Length.ShouldBe(0);
+        committed.Count.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Tombstone_null_value_commits_without_handler()
     {
         using var cts = new CancellationTokenSource();
         int calls = 0;
         bool handlerCalled = false;
-        (KafkaConsumer consumer, Mock<IConsumer<string, byte[]>> kafka, List<ConsumeResult<string, byte[]>> committed) = Create(
+        (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
             new HandlerWrapper(typeof(TestMessage),
             [
                 (_, _, _) =>
@@ -89,7 +123,7 @@ public sealed class KafkaConsumerTests
                     .Returns(() =>
                     {
                         if (Interlocked.Increment(ref calls) == 1)
-                            return Result(nameof(TestMessage), []);
+                            return Result(nameof(TestMessage), null);
                         cts.Cancel();
                         throw new OperationCanceledException(cts.Token);
                     });
@@ -393,7 +427,7 @@ public sealed class KafkaConsumerTests
     }
 
     [Fact]
-    public async Task Handler_false_with_dead_letter_topic_produce_throws_still_commits()
+    public async Task Handler_false_with_dead_letter_topic_produce_throws_does_not_commit()
     {
         using var cts = new CancellationTokenSource();
         int calls = 0;
@@ -401,7 +435,7 @@ public sealed class KafkaConsumerTests
         producer.Setup(p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("produce failed"));
 
-        (KafkaConsumer consumer, _, List<ConsumeResult<string, byte[]>> committed) = Create(
+        (KafkaConsumer consumer, Mock<IConsumer<string, byte[]>> kafka, List<ConsumeResult<string, byte[]>> committed) = Create(
             new HandlerWrapper(typeof(TestMessage),
             [
                 (_, _, _) => Task.FromResult(HandleResult.Retry)
@@ -419,10 +453,47 @@ public sealed class KafkaConsumerTests
             },
             producer,
             Settings("dlq-topic"));
+        consumer.DeadLetterRetryDelay = TimeSpan.Zero;
 
         await RunExecuteAsync(consumer, cts.Token);
 
-        committed.Count.ShouldBe(1);
+        committed.ShouldBeEmpty();
+        kafka.Verify(c => c.Seek(It.IsAny<TopicPartitionOffset>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Handler_exception_with_dead_letter_topic_produce_throws_does_not_commit()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        var producer = new Mock<IProducer<string, byte[]>>();
+        producer.Setup(p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("produce failed"));
+
+        (KafkaConsumer consumer, Mock<IConsumer<string, byte[]>> kafka, List<ConsumeResult<string, byte[]>> committed) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, _, _) => throw new InvalidOperationException("boom")
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result(nameof(TestMessage), [1]);
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            },
+            producer,
+            Settings("dlq-topic"));
+        consumer.DeadLetterRetryDelay = TimeSpan.Zero;
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        committed.ShouldBeEmpty();
+        kafka.Verify(c => c.Seek(It.IsAny<TopicPartitionOffset>()), Times.Once);
     }
 
     [Fact]
