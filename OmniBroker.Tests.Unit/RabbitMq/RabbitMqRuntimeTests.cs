@@ -102,7 +102,7 @@ public sealed class RabbitMqRuntimeTests
     }
 
     [Fact]
-    public async Task Keyed_IConnection_is_transient_and_follows_runtime_swap()
+    public async Task SetupInfrastructure_does_not_register_IConnection()
     {
         var builder = new BrokerOptionsBuilder { SetupName = "di" };
         builder.UseRabbitMq(new RabbitMQSettings
@@ -115,18 +115,8 @@ public sealed class RabbitMqRuntimeTests
 
         var services = new ServiceCollection();
         await extension.SetupInfrastructure(services, builder);
-        ServiceProvider provider = services.BuildServiceProvider();
 
-        RabbitMqRuntime runtime = provider.GetRequiredKeyedService<RabbitMqRuntime>(builder.BrokerId);
-        var first = Mock.Of<IConnection>();
-        runtime.Connection = first;
-
-        provider.GetRequiredKeyedService<IConnection>(builder.BrokerId).ShouldBeSameAs(first);
-
-        var second = Mock.Of<IConnection>();
-        runtime.Connection = second;
-
-        provider.GetRequiredKeyedService<IConnection>(builder.BrokerId).ShouldBeSameAs(second);
+        services.Any(d => d.ServiceType == typeof(IConnection)).ShouldBeFalse();
     }
 
     [Fact]

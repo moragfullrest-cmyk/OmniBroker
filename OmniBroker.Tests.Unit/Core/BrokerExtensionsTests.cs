@@ -199,10 +199,13 @@ public sealed class BrokerExtensionsTests
         });
 
         var unkeyed = services.Where(d => d.ServiceType == typeof(IProducer<TestMessage>) && !d.IsKeyedService).ToList();
-        unkeyed.ShouldNotBeEmpty();
+        unkeyed.Count.ShouldBe(1);
         unkeyed.ShouldAllBe(d => d.ImplementationType == typeof(MultiBrokerProducer<TestMessage>));
+        unkeyed.ShouldAllBe(d => d.Lifetime == ServiceLifetime.Singleton);
 
         services.Count(d => d.IsKeyedService && d.ServiceType == typeof(IProducer<TestMessage>)).ShouldBe(2);
+        services.Where(d => d.IsKeyedService && d.ServiceType == typeof(IProducer<TestMessage>))
+            .ShouldAllBe(d => d.Lifetime == ServiceLifetime.Singleton);
         services.Count(d => d.ServiceType == typeof(BrokerOptionsBuilder) && !d.IsKeyedService).ShouldBe(2);
     }
 
@@ -246,8 +249,11 @@ public sealed class BrokerExtensionsTests
             .ShouldBeTrue();
 
         var unkeyed = services.Where(d => d.ServiceType == typeof(IProducer<TestMessage>) && !d.IsKeyedService).ToList();
-        unkeyed.ShouldNotBeEmpty();
+        unkeyed.Count.ShouldBe(1);
         unkeyed.ShouldAllBe(d => d.ImplementationType == typeof(MultiBrokerProducer<TestMessage>));
+        unkeyed.ShouldAllBe(d => d.Lifetime == ServiceLifetime.Singleton);
+        services.Where(d => d.IsKeyedService && d.ServiceType == typeof(IProducer<TestMessage>))
+            .ShouldAllBe(d => d.Lifetime == ServiceLifetime.Singleton);
     }
 
     [Fact]

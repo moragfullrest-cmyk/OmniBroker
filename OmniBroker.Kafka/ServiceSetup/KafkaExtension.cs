@@ -81,11 +81,8 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
 
         foreach (Type type in builder.Producables)
         {
-            if (services.Any(_ => _.ServiceType == typeof(MultiBrokerProducer<>).MakeGenericType(type)) == false)
-            {
-                services.AddScoped(typeof(IProducer<>).MakeGenericType(type), typeof(MultiBrokerProducer<>).MakeGenericType(type));
-            }
-            services.AddKeyedScoped(typeof(IProducer<>).MakeGenericType(type), BrokerId, (s, obj) =>
+            services.TryAddMultiBrokerProducer(type);
+            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(type), BrokerId, (s, obj) =>
             {
                 Type producerType = typeof(KafkaProducer<>).MakeGenericType(type);
                 return Activator.CreateInstance(producerType,

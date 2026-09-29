@@ -22,12 +22,6 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         services.AddKeyedSingleton(BrokerId, settings);
         services.AddKeyedSingleton(BrokerId, new RabbitMqRuntime());
 
-        services.AddKeyedTransient<IConnection>(BrokerId, (s, _) =>
-        {
-            RabbitMqRuntime runtime = s.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
-            return runtime.RequireConnection();
-        });
-
         services.AddKeyedSingleton(BrokerId, (s, _) =>
         {
             RabbitMqRuntime runtime = s.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
@@ -67,7 +61,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
             services.AddTransient(rpcCallerServiceType, CreateRpcCaller);
             services.AddKeyedTransient(rpcCallerServiceType, BrokerId, (s, _) => CreateRpcCaller(s));
-            services.AddKeyedScoped(typeof(IProducer<>).MakeGenericType(t.Key), BrokerId, (s, obj) =>
+            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(t.Key), BrokerId, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(t.Key);
                 return Activator.CreateInstance(producerType,
@@ -104,7 +98,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
                 ],
                 CreateMessage: HandlerWrapper.BuildCreateMessage(t.Key)
             ));
-            services.AddKeyedScoped(typeof(IProducer<>).MakeGenericType(returnType), BrokerId, (s, obj) =>
+            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(returnType), BrokerId, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(returnType);
                 return Activator.CreateInstance(producerType,
@@ -165,11 +159,8 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
     {
         foreach (Type type in builder.Producables)
         {
-            if (services.Any(_ => _.ServiceType == typeof(MultiBrokerProducer<>).MakeGenericType(type)) == false)
-            {
-                services.AddScoped(typeof(IProducer<>).MakeGenericType(type), typeof(MultiBrokerProducer<>).MakeGenericType(type));
-            }
-            services.AddKeyedScoped(typeof(IProducer<>).MakeGenericType(type), BrokerId, (s, obj) =>
+            services.TryAddMultiBrokerProducer(type);
+            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(type), BrokerId, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(type);
                 return Activator.CreateInstance(producerType,

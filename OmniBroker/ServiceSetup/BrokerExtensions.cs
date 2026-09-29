@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using OmniBroker.Infrastructure;
 
 namespace OmniBroker;
@@ -59,6 +60,13 @@ public static class BrokerExtensions
         services.AddSingleton(options);
         services.AddKeyedSingleton(options.BrokerId, options);
         return services;
+    }
+
+    internal static void TryAddMultiBrokerProducer(this IServiceCollection services, Type messageType)
+    {
+        services.TryAdd(ServiceDescriptor.Singleton(
+            typeof(IProducer<>).MakeGenericType(messageType),
+            typeof(MultiBrokerProducer<>).MakeGenericType(messageType)));
     }
 
     /// <summary>
