@@ -10,6 +10,9 @@ namespace OmniBroker.Tests.Unit.Core;
 public sealed class MultiBrokerProducerTests
 {
     private static MultiBrokerProducer<TestMessage> Create(params IProducer<TestMessage>[] producers)
+        => CreateWithIds(producers).Sut;
+
+    private static (MultiBrokerProducer<TestMessage> Sut, string[] BrokerIds) CreateWithIds(params IProducer<TestMessage>[] producers)
     {
         var brokerIds = producers.Select(_ => Guid.NewGuid().ToString()).ToArray();
         var builders = brokerIds.Select(id =>
@@ -30,17 +33,18 @@ public sealed class MultiBrokerProducerTests
             services.AddKeyedSingleton(id, producer);
         }
 
-        return new MultiBrokerProducer<TestMessage>(services.BuildServiceProvider());
+        return (new MultiBrokerProducer<TestMessage>(services.BuildServiceProvider()), brokerIds);
     }
 
     [Fact]
-    public async Task Publish_no_producers_returns_false()
+    public async Task Publish_no_producers_throws()
     {
         MultiBrokerProducer<TestMessage> sut = Create();
 
-        bool result = await sut.Publish(new TestMessage());
+        InvalidOperationException ex = await Should.ThrowAsync<InvalidOperationException>(() => sut.Publish(new TestMessage()));
 
-        result.ShouldBeFalse();
+        ex.Message.ShouldContain(nameof(TestMessage));
+        ex.Message.ShouldContain("No producers");
     }
 
     [Fact]
@@ -74,7 +78,20 @@ public sealed class MultiBrokerProducerTests
     }
 
     [Fact]
-    public async Task Publish_one_producer_false_returns_false()
+    public async Task Publish_single_producer_false_returns_false()
+    {
+        var mock = new Mock<IProducer<TestMessage>>();
+        mock.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+        MultiBrokerProducer<TestMessage> sut = Create(mock.Object);
+
+        bool result = await sut.Publish(new TestMessage());
+
+        result.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Publish_partial_failure_throws_with_per_broker_outcomes()
     {
         var first = new Mock<IProducer<TestMessage>>();
         first.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
@@ -82,11 +99,18 @@ public sealed class MultiBrokerProducerTests
         var second = new Mock<IProducer<TestMessage>>();
         second.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(false);
-        MultiBrokerProducer<TestMessage> sut = Create(first.Object, second.Object);
+        (MultiBrokerProducer<TestMessage> sut, string[] brokerIds) = CreateWithIds(first.Object, second.Object);
 
-        bool result = await sut.Publish(new TestMessage());
+        MultiBrokerPublishException ex = await Should.ThrowAsync<MultiBrokerPublishException>(() => sut.Publish(new TestMessage()));
 
-        result.ShouldBeFalse();
+        ex.MessageType.ShouldBe(typeof(TestMessage));
+        ex.Message.ShouldContain(brokerIds[1]);
+        ex.Message.ShouldContain(brokerIds[0]);
+        ex.Outcomes.Count.ShouldBe(2);
+        ex.Outcomes[0].ShouldBe(new BrokerPublishOutcome(brokerIds[0], first.Object.GetType().Name, true));
+        ex.Outcomes[1].ShouldBe(new BrokerPublishOutcome(brokerIds[1], second.Object.GetType().Name, false));
+        first.Verify(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
+        second.Verify(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -114,9 +138,9 @@ public sealed class MultiBrokerProducerTests
 
         var sut = new MultiBrokerProducer<TestMessage>(services.BuildServiceProvider());
 
-        bool result = await sut.Publish(new TestMessage());
+        MultiBrokerPublishException ex = await Should.ThrowAsync<MultiBrokerPublishException>(() => sut.Publish(new TestMessage()));
 
-        result.ShouldBeFalse();
+        ex.Outcomes.Single(outcome => outcome.BrokerId == secondId).Succeeded.ShouldBeFalse();
         logger.Verify(
             x => x.Log(
                 LogLevel.Warning,
