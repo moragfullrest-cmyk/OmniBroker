@@ -29,7 +29,7 @@ public static class BrokerExtensions
         ArgumentNullException.ThrowIfNull(optionsAction);
 
         var options = new BrokerOptionsBuilder();
-        if (name is not null)
+        if (string.IsNullOrWhiteSpace(name) == false)
         {
             options.BrokerId = name;
             options.SetupName = name;
@@ -38,9 +38,6 @@ public static class BrokerExtensions
         optionsAction(options);
 
         ArgumentNullException.ThrowIfNull(options.Extension);
-
-        if (string.IsNullOrWhiteSpace(options.BrokerId))
-            throw new ArgumentException("Broker identifier cannot be empty or whitespace.");
 
         if (services.Any(d => d.IsKeyedService && d.ServiceKey is string key && key == options.BrokerId && d.ServiceType == typeof(BrokerOptionsBuilder)))
             throw new ArgumentException($"Broker '{options.BrokerId}' is already registered.");
@@ -213,6 +210,18 @@ public static class BrokerExtensions
             throw new ArgumentException($"Message of type {messageType} is already registered for RPC messaging");
     }
 
+    private static readonly MethodInfo GetKeyedServiceOpen =
+        typeof(ServiceProviderKeyedServiceExtensions)
+            .GetMethod(nameof(ServiceProviderKeyedServiceExtensions.GetKeyedService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider), typeof(object)])!;
+
+    private static readonly MethodInfo GetRequiredKeyedServiceOpen =
+        typeof(ServiceProviderKeyedServiceExtensions)
+            .GetMethod(nameof(ServiceProviderKeyedServiceExtensions.GetRequiredKeyedService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider), typeof(object)])!;
+
+    private static readonly MethodInfo GetRequiredServiceOpen =
+        typeof(ServiceProviderServiceExtensions)
+            .GetMethod(nameof(ServiceProviderServiceExtensions.GetRequiredService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider)])!;
+
     internal static Func<IServiceProvider, IMessage, MessageContext, Task<TResult>> WrapActionDelegate<TResult>(Delegate @delegate)
     {
 
@@ -236,9 +245,7 @@ public static class BrokerExtensions
             // 1) soft keyed by CurrentBrokerId (broker infrastructure)
             // 2) required keyed by [FromKeyedServices] if present
             // 3) otherwise required unkeyed
-            MethodInfo getKeyedService = typeof(ServiceProviderKeyedServiceExtensions)
-                    .GetMethod(nameof(ServiceProviderKeyedServiceExtensions.GetKeyedService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider), typeof(object)])!
-                    .MakeGenericMethod(_.ParameterType);
+            MethodInfo getKeyedService = GetKeyedServiceOpen.MakeGenericMethod(_.ParameterType);
 
             Expression softBrokerCall = Expression.Call(
                 getKeyedService,
@@ -249,9 +256,7 @@ public static class BrokerExtensions
             Expression fallbackCall;
             if (keyedAttr is not null)
             {
-                MethodInfo getRequiredKeyed = typeof(ServiceProviderKeyedServiceExtensions)
-                        .GetMethod(nameof(ServiceProviderKeyedServiceExtensions.GetRequiredKeyedService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider), typeof(object)])!
-                        .MakeGenericMethod(_.ParameterType);
+                MethodInfo getRequiredKeyed = GetRequiredKeyedServiceOpen.MakeGenericMethod(_.ParameterType);
                 fallbackCall = Expression.Call(
                     getRequiredKeyed,
                     provParamExp,
@@ -259,9 +264,7 @@ public static class BrokerExtensions
             }
             else
             {
-                MethodInfo getRequired = typeof(ServiceProviderServiceExtensions)
-                        .GetMethod(nameof(ServiceProviderServiceExtensions.GetRequiredService), BindingFlags.Static | BindingFlags.Public, [typeof(IServiceProvider)])!
-                        .MakeGenericMethod(_.ParameterType);
+                MethodInfo getRequired = GetRequiredServiceOpen.MakeGenericMethod(_.ParameterType);
                 fallbackCall = Expression.Call(getRequired, provParamExp);
             }
 
