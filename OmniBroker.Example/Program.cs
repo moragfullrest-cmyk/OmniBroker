@@ -47,6 +47,9 @@ if (kafkaSection.GetValue("Enabled", true))
         options.UseKafka(kafkaSettings);
         options.AddProducerFor<ExampleMessage>();
         options.AddConsumerFor<ExampleMessage>((ExampleMessage m) => { Console.WriteLine($"Kafka received: {m.Text}"); return Task.FromResult(HandleResult.Ack); });
+        options.AddRpcCaller<KafkaEchoRequest, KafkaEchoReply>();
+        options.AddRpcReceiver<KafkaEchoRequest, KafkaEchoReply>((KafkaEchoRequest message) =>
+            Task.FromResult(new KafkaEchoReply { Text = new string([.. message.Text.Reverse()]) }));
     });
 }
 
@@ -61,30 +64,43 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.MapGet("/testBroker/send/{text}",
-    async (
-        [FromRoute] string text,
-        IProducer<ExampleMessage> producer
-    ) =>
-    {
-        await producer.Publish(new ExampleMessage { Text = text });
-    });
+//app.MapGet("/testBroker/send/{text}",
+//    async (
+//        [FromRoute] string text,
+//        IProducer<ExampleMessage> producer
+//    ) =>
+//    {
+//        await producer.Publish(new ExampleMessage { Text = text });
+//    });
 
-app.MapGet("/testBroker/call/{text}",
+//app.MapGet("/testBroker/call/{text}",
+//    async (
+//        [FromRoute] string text,
+//        IRpcCaller<ExampleMessage2, ExampleMessage3> caller
+//    ) =>
+//    {
+//        try
+//        {
+//            return (await caller.Call(new ExampleMessage2 { Text = text })).Text;
+//        }
+//        catch (Exception ex)
+//        {
+//            return "error";
+//        }
+//    });
+
+app.MapGet("/testBroker/kafka/call/{text}",
     async (
         [FromRoute] string text,
-        IRpcCaller<ExampleMessage2, ExampleMessage3> caller
+        [FromKeyedServices("kafka")] IRpcCaller<KafkaEchoRequest, KafkaEchoReply> caller,
+        CancellationToken cancellationToken
     ) =>
     {
-        try
-        {
-            return (await caller.Call(new ExampleMessage2 { Text = text })).Text;
-        }
-        catch (Exception ex)
-        {
-            return "error";
-        }
-    });
+        KafkaEchoReply reply = await caller.Call(new KafkaEchoRequest { Text = text }, cancellationToken);
+        return reply.Text;
+    })
+    .WithName("KafkaRpcCall")
+    .WithSummary("Kafka RPC: отправляет строку и возвращает её перевёрнутой");
 
 app.Run();
 
@@ -113,6 +129,22 @@ public class ExampleMessage2 : IMessage
 }
 
 public class ExampleMessage3 : IMessage
+{
+    public string CorrelationId { get; set; }
+    public byte[] Body { get => Encoding.UTF8.GetBytes(Text); set => Text = Encoding.UTF8.GetString(value); }
+    public string Text { get; set; } = "Test";
+    public string Tag { get; set; }
+}
+
+public class KafkaEchoRequest : IMessage
+{
+    public string CorrelationId { get; set; }
+    public byte[] Body { get => Encoding.UTF8.GetBytes(Text); set => Text = Encoding.UTF8.GetString(value); }
+    public string Text { get; set; } = "Test";
+    public string Tag { get; set; }
+}
+
+public class KafkaEchoReply : IMessage
 {
     public string CorrelationId { get; set; }
     public byte[] Body { get => Encoding.UTF8.GetBytes(Text); set => Text = Encoding.UTF8.GetString(value); }

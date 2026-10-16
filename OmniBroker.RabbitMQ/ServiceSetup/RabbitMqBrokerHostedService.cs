@@ -9,6 +9,7 @@ internal sealed class RabbitMqBrokerHostedService(IServiceProvider services, str
     {
         BrokerOptionsBuilder builder = services.GetRequiredKeyedService<BrokerOptionsBuilder>(brokerId);
         IBrokerExtension extension = builder.Extension!;
+        await extension.ValidateRemoteBrokerState(services, builder);
         await extension.StartInfrastructure(services, builder);
         await extension.StartConsumers(services, builder);
     }

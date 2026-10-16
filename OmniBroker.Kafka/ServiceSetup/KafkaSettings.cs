@@ -52,4 +52,18 @@ public sealed class KafkaSettings
     /// If that produce fails, the offset stays uncommitted and the consumer seeks back to retry the record.
     /// </summary>
     public string? DeadLetterTopic { get; init; }
+
+    /// <summary>
+    /// RPC response wait timeout.
+    /// </summary>
+    public TimeSpan RpcTimeout { get; init; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
+    /// Optional topic where RPC replies are produced.
+    /// When RPC callers are registered, startup requires this topic and claims one partition
+    /// that has a leader. The claim is the consumer group "{GroupId or setup name}.rpc-reply-{partitionId}":
+    /// a live member means that partition is taken. That consumer stays paused and does not read replies.
+    /// A separate consumer assigns only the claimed partition and correlates replies with pending calls.
+    /// </summary>
+    public string? RpcReplyTopic { get; init; }
 }

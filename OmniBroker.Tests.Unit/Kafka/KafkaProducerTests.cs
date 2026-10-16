@@ -141,4 +141,59 @@ public sealed class KafkaProducerTests
 
         result.ShouldBeFalse();
     }
+
+    [Fact]
+    public async Task Publish_reply_without_reply_to_targets_reply_partition()
+    {
+        Message<string, byte[]>? captured = null;
+        TopicPartition? capturedPartition = null;
+        (KafkaProducer<TestMessage> sut, Mock<IProducer<string, byte[]>> producer, _) = CreateSut(p =>
+        {
+            p.Setup(x => x.ProduceAsync(It.IsAny<TopicPartition>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()))
+                .Callback<TopicPartition, Message<string, byte[]>, CancellationToken>((partition, message, _) =>
+                {
+                    capturedPartition = partition;
+                    captured = message;
+                })
+                .ReturnsAsync(new DeliveryResult<string, byte[]> { Status = PersistenceStatus.Persisted, Topic = "rpc-replies" });
+        });
+
+        bool result = await sut.Publish(
+            new TestMessage { Body = [1], Tag = "key" },
+            new KafkaPublishOptions("corr-1", null, "rpc-replies", ReplyPartition: 0));
+
+        result.ShouldBeTrue();
+        capturedPartition.ShouldNotBeNull();
+        capturedPartition!.Topic.ShouldBe("rpc-replies");
+        capturedPartition.Partition.Value.ShouldBe(0);
+        captured.ShouldNotBeNull();
+        Encoding.UTF8.GetString(captured!.Headers!.GetLastBytes(KafkaMessageHeaders.CorrelationId)).ShouldBe("corr-1");
+        captured.Headers.TryGetLastBytes(KafkaMessageHeaders.ReplyTopic, out _).ShouldBeFalse();
+        captured.Headers.TryGetLastBytes(KafkaMessageHeaders.ReplyPartition, out _).ShouldBeFalse();
+        producer.Verify(
+            p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task Publish_reply_partition_header_keeps_key_based_topic()
+    {
+        Message<string, byte[]>? captured = null;
+        (KafkaProducer<TestMessage> sut, Mock<IProducer<string, byte[]>> producer, _) = CreateSut(p =>
+        {
+            p.Setup(x => x.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()))
+                .Callback<string, Message<string, byte[]>, CancellationToken>((_, message, _) => captured = message)
+                .ReturnsAsync(new DeliveryResult<string, byte[]> { Status = PersistenceStatus.Persisted });
+        });
+
+        await sut.Publish(
+            new TestMessage { Body = [1], Tag = "key" },
+            new KafkaPublishOptions("corr-1", "rpc-replies", null, ReplyPartition: 4));
+
+        Encoding.UTF8.GetString(captured!.Headers!.GetLastBytes(KafkaMessageHeaders.ReplyPartition)).ShouldBe("4");
+        producer.Verify(p => p.ProduceAsync(nameof(TestMessage), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()), Times.Once);
+        producer.Verify(
+            p => p.ProduceAsync(It.IsAny<TopicPartition>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
 }

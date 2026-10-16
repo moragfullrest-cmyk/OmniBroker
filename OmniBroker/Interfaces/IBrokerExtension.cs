@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using OmniBroker.Infrastructure;
 
 namespace OmniBroker;
 
@@ -36,6 +37,12 @@ public interface IBrokerExtension
     /// Register RPC components in DI
     /// </summary>
     Task SetupRpc(IServiceCollection services, BrokerOptionsBuilder builder);
+
+    /// <summary>
+    /// Read remote broker state that this process cannot create itself.
+    /// Throws <see cref="BrokerStateException"/> when that state is not ready.
+    /// </summary>
+    Task ValidateRemoteBrokerState(IServiceProvider serviceProvider, BrokerOptionsBuilder builder);
 
     /// <summary>
     /// Start message consumption

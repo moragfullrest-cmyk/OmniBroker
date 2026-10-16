@@ -1,6 +1,0 @@
-@OmniBroker.Example_HostAddress = http://localhost:5179
-
-GET {{OmniBroker.Example_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

@@ -1,4 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using OmniBroker;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.Kafka.ServiceSetup;
@@ -37,15 +39,34 @@ public sealed class BrokerExtensionsTests
     }
 
     [Fact]
-    public void AddBroker_rpc_on_kafka_throws()
+    public void AddBroker_rpc_caller_on_kafka_registers_caller()
     {
         var services = new ServiceCollection();
 
-        Should.Throw<ArgumentException>(() => services.AddBroker(b =>
+        services.AddBroker(b =>
         {
             b.UseKafka(KafkaSettings());
             b.AddRpcCaller<TestMessage, TestReplyMessage>();
-        }));
+        });
+
+        services.Any(d => d.ServiceType == typeof(IRpcCaller<TestMessage, TestReplyMessage>)).ShouldBeTrue();
+        services.Any(d => d.IsKeyedService && d.ServiceType == typeof(IRpcCaller<TestMessage, TestReplyMessage>)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void AddBroker_rpc_receiver_on_kafka_registers_consumer()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBroker(b =>
+        {
+            b.UseKafka(KafkaSettings());
+            b.AddRpcReceiver<TestMessage, TestReplyMessage>((TestMessage _) => Task.FromResult(new TestReplyMessage()));
+        });
+
+        services.Count(d => d.ServiceType == typeof(IHostedService)).ShouldBe(2);
+        services.Any(d => d.ServiceType == typeof(KafkaRpcReplyLease)).ShouldBeFalse();
+        services.Any(d => d.IsKeyedService && d.ServiceType == typeof(HandlerWrapper)).ShouldBeTrue();
     }
 
     [Fact]

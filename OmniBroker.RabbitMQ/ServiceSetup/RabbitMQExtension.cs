@@ -7,6 +7,7 @@ using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ.Implementations;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 
 namespace OmniBroker.RabbitMQ.ServiceSetup;
 
@@ -173,33 +174,49 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         return Task.CompletedTask;
     }
 
+    public async Task ValidateRemoteBrokerState(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+        runtime.StoppingToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            await EnsureConnectionAsync(runtime);
+        }
+        catch (OperationCanceledException) when (runtime.StoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new BrokerStateException(BrokerId, ConnectionFailureMessage(), ex);
+        }
+
+        try
+        {
+            await ProbeChannelAsync(runtime);
+        }
+        catch (BrokerStateException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (runtime.StoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new BrokerStateException(BrokerId, ChannelFailureMessage(), ex);
+        }
+    }
+
     public async Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     {
         RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
         runtime.StoppingToken.ThrowIfCancellationRequested();
 
-        if (runtime.Connection is null)
-        {
-            ConnectionFactory factory = new()
-            {
-                UserName = settings.UserName,
-                Password = settings.Password,
-                HostName = settings.HostName,
-                VirtualHost = settings.VirtualHost,
-                Port = settings.Port
-            };
-
-            if (settings.UseTls)
-            {
-                factory.Ssl = new SslOption
-                {
-                    Enabled = true,
-                    ServerName = settings.HostName
-                };
-            }
-
-            runtime.Connection = await factory.CreateConnectionAsync(runtime.StoppingToken);
-        }
+        await EnsureConnectionAsync(runtime);
 
         if (runtime.ChannelPool is null)
         {
@@ -210,9 +227,73 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
         INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerId);
         IConnection connection = runtime.RequireConnection();
-        await TopologyDeclarer.EnsureProducersDeclared(connection, nameResolver, builder);
-        await TopologyDeclarer.EnsureConsumersDeclared(connection, nameResolver, builder, settings.DeadLetterExchange, settings.DurableQueues);
-        await TopologyDeclarer.EnsureRpcDeclared(connection, nameResolver, builder, settings.DeadLetterExchange, settings.DurableQueues);
+        try
+        {
+            await TopologyDeclarer.EnsureProducersDeclared(connection, nameResolver, builder);
+            await TopologyDeclarer.EnsureConsumersDeclared(connection, nameResolver, builder, settings.DeadLetterExchange, settings.DurableQueues);
+            await TopologyDeclarer.EnsureRpcDeclared(connection, nameResolver, builder, settings.DeadLetterExchange, settings.DurableQueues);
+        }
+        catch (OperationInterruptedException ex) when (IsUnfixableRemoteState(ex))
+        {
+            throw new BrokerStateException(
+                BrokerId,
+                $"RabbitMQ refused topology that cannot be changed from code. ReplyCode={ex.ShutdownReason!.ReplyCode}, ReplyText={ex.ShutdownReason.ReplyText}.",
+                ex);
+        }
+    }
+
+    private async Task EnsureConnectionAsync(RabbitMqRuntime runtime)
+    {
+        if (runtime.Connection is not null)
+            return;
+
+        ConnectionFactory factory = new()
+        {
+            UserName = settings.UserName,
+            Password = settings.Password,
+            HostName = settings.HostName,
+            VirtualHost = settings.VirtualHost,
+            Port = settings.Port
+        };
+
+        if (settings.UseTls)
+        {
+            factory.Ssl = new SslOption
+            {
+                Enabled = true,
+                ServerName = settings.HostName
+            };
+        }
+
+        runtime.Connection = await factory.CreateConnectionAsync(runtime.StoppingToken);
+    }
+
+    private async Task ProbeChannelAsync(RabbitMqRuntime runtime)
+    {
+        IChannel channel = await runtime.RequireConnection().CreateChannelAsync(cancellationToken: runtime.StoppingToken);
+        try
+        {
+            await channel.CloseAsync(Constants.ReplySuccess, "Remote broker state validated", false, runtime.StoppingToken);
+        }
+        finally
+        {
+            await channel.DisposeAsync();
+        }
+    }
+
+    private string ConnectionFailureMessage()
+        => $"RabbitMQ at {settings.HostName}:{settings.Port}, virtual host '{settings.VirtualHost}', is unreachable.";
+
+    private string ChannelFailureMessage()
+        => $"RabbitMQ at {settings.HostName}:{settings.Port}, virtual host '{settings.VirtualHost}', refused a channel.";
+
+    private static bool IsUnfixableRemoteState(OperationInterruptedException exception)
+    {
+        if (exception.ShutdownReason is null)
+            return false;
+
+        ushort code = exception.ShutdownReason.ReplyCode;
+        return code == Constants.AccessRefused || code == Constants.PreconditionFailed;
     }
 
     /// <summary>
@@ -274,6 +355,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
             try
             {
+                await ValidateRemoteBrokerState(serviceProvider, builder);
                 await StartInfrastructure(serviceProvider, builder);
                 break;
             }

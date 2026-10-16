@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Confluent.Kafka;
 using Microsoft.Extensions.Logging;
@@ -25,17 +26,11 @@ internal sealed class KafkaProducer<TMessage>(
                 Value = message.Body
             };
 
-            string? correlationId = options?.CorrelationId ?? message.CorrelationId;
-            if (!string.IsNullOrEmpty(correlationId))
-            {
-                kafkaMessage.Headers = new Headers
-                {
-                    { KafkaMessageHeaders.CorrelationId, Encoding.UTF8.GetBytes(correlationId) }
-                };
-            }
+            kafkaMessage.Headers = CreateHeaders(options, message.CorrelationId);
 
-            DeliveryResult<string, byte[]> deliveryResult =
-                await producer.ProduceAsync(topicName, kafkaMessage, cancellationToken);
+            DeliveryResult<string, byte[]> deliveryResult = ReplyProducePartition(options) is int partition
+                ? await producer.ProduceAsync(new TopicPartition(topicName, new Partition(partition)), kafkaMessage, cancellationToken)
+                : await producer.ProduceAsync(topicName, kafkaMessage, cancellationToken);
 
             if (deliveryResult.Status == PersistenceStatus.NotPersisted)
             {
@@ -53,5 +48,35 @@ internal sealed class KafkaProducer<TMessage>(
             logger.LogWarning(e, "Delivery failed: {Reason}", e.Error.Reason);
             return false;
         }
+    }
+
+    private static Headers? CreateHeaders(PublishOptions? options, string? messageCorrelationId)
+    {
+        string? correlationId = options?.CorrelationId ?? messageCorrelationId;
+        string? replyTopic = options?.ReplyTo;
+        Headers? headers = null;
+
+        if (!string.IsNullOrEmpty(correlationId))
+            Add(KafkaMessageHeaders.CorrelationId, correlationId);
+        if (!string.IsNullOrWhiteSpace(replyTopic))
+            Add(KafkaMessageHeaders.ReplyTopic, replyTopic);
+        if (options is KafkaPublishOptions { ReplyPartition: int replyPartition } && !string.IsNullOrWhiteSpace(replyTopic))
+            Add(KafkaMessageHeaders.ReplyPartition, replyPartition.ToString(CultureInfo.InvariantCulture));
+
+        return headers;
+
+        void Add(string key, string value)
+        {
+            headers ??= new Headers();
+            headers.Add(key, Encoding.UTF8.GetBytes(value));
+        }
+    }
+
+    private static int? ReplyProducePartition(PublishOptions? options)
+    {
+        if (options is not KafkaPublishOptions { ReplyPartition: int replyPartition })
+            return null;
+
+        return string.IsNullOrWhiteSpace(options.ReplyTo) ? replyPartition : null;
     }
 }

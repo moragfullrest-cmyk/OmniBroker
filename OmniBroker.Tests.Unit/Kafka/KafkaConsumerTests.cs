@@ -564,4 +564,82 @@ public sealed class KafkaConsumerTests
         kafka.Verify(c => c.Close(), Times.Once);
         producer.Verify(p => p.Dispose(), Times.Never);
     }
+
+    [Fact]
+    public async Task Reply_headers_populate_reply_info()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        IReplyInfo? replyInfo = null;
+        string? correlationId = null;
+        var headers = new Headers
+        {
+            { KafkaMessageHeaders.CorrelationId, Encoding.UTF8.GetBytes("corr-1") },
+            { KafkaMessageHeaders.ReplyTopic, Encoding.UTF8.GetBytes("rpc-replies") },
+            { KafkaMessageHeaders.ReplyPartition, Encoding.UTF8.GetBytes("4") }
+        };
+        (KafkaConsumer consumer, _, _) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, message, context) =>
+                {
+                    correlationId = message.CorrelationId;
+                    replyInfo = context.ReplyInfo;
+                    return Task.FromResult(HandleResult.Ack);
+                }
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result(nameof(TestMessage), [1], headers: headers);
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            });
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        correlationId.ShouldBe("corr-1");
+        KafkaReplyInfo info = replyInfo.ShouldBeOfType<KafkaReplyInfo>();
+        info.ReplyTopic.ShouldBe("rpc-replies");
+        info.ReplyPartition.ShouldBe(4);
+    }
+
+    [Fact]
+    public async Task Message_without_reply_headers_has_no_reply_info()
+    {
+        using var cts = new CancellationTokenSource();
+        int calls = 0;
+        IReplyInfo? replyInfo = null;
+        bool called = false;
+        (KafkaConsumer consumer, _, _) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, _, context) =>
+                {
+                    called = true;
+                    replyInfo = context.ReplyInfo;
+                    return Task.FromResult(HandleResult.Ack);
+                }
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        if (Interlocked.Increment(ref calls) == 1)
+                            return Result(nameof(TestMessage), [1]);
+                        cts.Cancel();
+                        throw new OperationCanceledException(cts.Token);
+                    });
+            });
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        called.ShouldBeTrue();
+        replyInfo.ShouldBeNull();
+    }
 }

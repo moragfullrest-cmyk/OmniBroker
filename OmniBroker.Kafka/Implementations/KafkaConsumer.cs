@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Confluent.Kafka;
 using Microsoft.Extensions.DependencyInjection;
@@ -86,7 +87,7 @@ internal sealed class KafkaConsumer : BackgroundService
 
                 var context = new MessageContext(
                     CurrentBrokerId: _brokerId,
-                    ReplyInfo: null,
+                    ReplyInfo: ReadReplyInfo(receivedMessage.Message.Headers),
                     CancellationToken: stoppingToken);
                 HandleResult result = HandleResult.Ack;
                 foreach (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> handlerDelegate in handler.Handlers)
@@ -220,11 +221,27 @@ internal sealed class KafkaConsumer : BackgroundService
     }
 
     private static string? ReadCorrelationId(Headers? headers)
+        => ReadHeader(headers, KafkaMessageHeaders.CorrelationId);
+
+    private static KafkaReplyInfo? ReadReplyInfo(Headers? headers)
+    {
+        string? topic = ReadHeader(headers, KafkaMessageHeaders.ReplyTopic);
+        string? partitionText = ReadHeader(headers, KafkaMessageHeaders.ReplyPartition);
+        if (topic is null && partitionText is null)
+            return null;
+
+        int? partition = int.TryParse(partitionText, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value)
+            ? value
+            : null;
+        return new KafkaReplyInfo { ReplyTopic = topic, ReplyPartition = partition };
+    }
+
+    private static string? ReadHeader(Headers? headers, string key)
     {
         if (headers is null)
             return null;
 
-        IHeader? header = headers.FirstOrDefault(h => h.Key == KafkaMessageHeaders.CorrelationId);
+        IHeader? header = headers.FirstOrDefault(h => h.Key == key);
         if (header is null)
             return null;
 

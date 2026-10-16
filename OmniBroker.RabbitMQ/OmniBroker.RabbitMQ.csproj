@@ -5,7 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
-    <Version>8.0.0</Version>
+    <Version>8.1.0</Version>
     <Authors>OmniBroker</Authors>
     <Description>Пакет для работы с RabbitMQ</Description>
   </PropertyGroup>
