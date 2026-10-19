@@ -40,24 +40,40 @@ public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TM
                 "PublishOptions.Destination cannot be used with MultiBrokerProducer when more than one broker is registered for this message type.");
         }
 
+        if (_producers.Count == 1)
+        {
+            (string brokerId, IProducer<TMessage> producer) = _producers[0];
+            bool published = await producer.Publish(message, options, cancellationToken);
+            if (!published)
+                LogFailure(brokerId, producer);
+            return published;
+        }
+
         var outcomes = new List<BrokerPublishOutcome>(_producers.Count);
+        bool anyFailed = false;
         foreach ((string brokerId, IProducer<TMessage> producer) in _producers)
         {
             bool published = await producer.Publish(message, options, cancellationToken);
             outcomes.Add(new BrokerPublishOutcome(brokerId, producer.GetType().Name, published));
             if (!published)
             {
-                _logger.LogWarning(
-                    "Producer {ProducerType} on broker {BrokerId} failed to publish {MessageType}",
-                    producer.GetType().Name,
-                    brokerId,
-                    typeof(TMessage).Name);
+                anyFailed = true;
+                LogFailure(brokerId, producer);
             }
         }
 
-        if (_producers.Count > 1 && outcomes.Any(outcome => !outcome.Succeeded))
+        if (anyFailed)
             throw new MultiBrokerPublishException(typeof(TMessage), outcomes);
 
-        return outcomes.All(outcome => outcome.Succeeded);
+        return true;
+    }
+
+    private void LogFailure(string brokerId, IProducer<TMessage> producer)
+    {
+        _logger.LogWarning(
+            "Producer {ProducerType} on broker {BrokerId} failed to publish {MessageType}",
+            producer.GetType().Name,
+            brokerId,
+            typeof(TMessage).Name);
     }
 }

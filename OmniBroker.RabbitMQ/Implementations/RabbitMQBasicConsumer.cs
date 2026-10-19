@@ -17,6 +17,12 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
     private readonly string _brokerId;
     private readonly RabbitMQSettings _settings;
 
+    /// <summary>
+    /// Pause before nack with requeue, so a failing message does not immediately occupy the channel again.
+    /// Dead-letter nacks do not wait.
+    /// </summary>
+    internal TimeSpan RequeueDelay { get; set; } = TimeSpan.FromSeconds(1);
+
     public RabbitMQBasicConsumer(
         IServiceProvider serviceProvider,
         IChannel channel,
@@ -62,7 +68,9 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
             message.Tag = routingKey;
             var context = new MessageContext(
                 CurrentBrokerId: _brokerId,
-                ReplyInfo: new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo },
+                ReplyInfo: string.IsNullOrEmpty(properties.ReplyTo)
+                    ? null
+                    : new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo },
                 CancellationToken: cancellationToken);
             HandleResult result = HandleResult.Ack;
             foreach (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> _delegate in handler.Handlers)
@@ -83,7 +91,7 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
                     deliveryTag,
                     exchange,
                     routingKey);
-                await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: RequeueOnFailure, cancellationToken);
+                await NackAsync(deliveryTag, RequeueOnFailure, cancellationToken);
             }
         }
         catch (Exception ex)
@@ -94,11 +102,28 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
                 deliveryTag,
                 exchange,
                 routingKey);
-            await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: RequeueOnFailure, cancellationToken);
+            await NackAsync(deliveryTag, RequeueOnFailure, cancellationToken);
         }
     }
 
     private bool RequeueOnFailure => string.IsNullOrWhiteSpace(_settings.DeadLetterExchange);
+
+    private async Task NackAsync(ulong deliveryTag, bool requeue, CancellationToken cancellationToken)
+    {
+        if (requeue)
+        {
+            try
+            {
+                await Task.Delay(RequeueDelay, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+
+        await _channel.BasicNackAsync(deliveryTag, multiple: false, requeue: requeue, cancellationToken);
+    }
 
     public override async Task HandleChannelShutdownAsync(object channel, ShutdownEventArgs reason)
     {

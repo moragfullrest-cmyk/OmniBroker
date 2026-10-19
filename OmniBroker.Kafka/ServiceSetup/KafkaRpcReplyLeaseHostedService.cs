@@ -22,6 +22,13 @@ internal sealed class KafkaRpcReplyLeaseHostedService(
     private IConsumer<string, byte[]>? _replies;
     private ConcurrentDictionary<string, KafkaRpcWait>? _pending;
     private KafkaRpcReplyLease? _lease;
+    private DateTime _nextClaimPollAt;
+
+    /// <summary>
+    /// How often the paused claim session is polled so the group membership stays alive.
+    /// The poll itself does not wait: replies are read on the next line.
+    /// </summary>
+    internal TimeSpan ClaimMembershipPollInterval { get; set; } = TimeSpan.FromSeconds(5);
 
     public override async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -77,7 +84,7 @@ internal sealed class KafkaRpcReplyLeaseHostedService(
         {
             try
             {
-                _session?.Poll(TimeSpan.FromMilliseconds(100));
+                PollClaimMembershipIfDue();
                 ConsumeResult<string, byte[]>? received = _replies?.Consume(TimeSpan.FromMilliseconds(100));
                 if (received is null)
                     continue;
@@ -110,6 +117,16 @@ internal sealed class KafkaRpcReplyLeaseHostedService(
                     break;
             }
         }
+    }
+
+    private void PollClaimMembershipIfDue()
+    {
+        DateTime now = DateTime.UtcNow;
+        if (now < _nextClaimPollAt)
+            return;
+
+        _session?.Poll(TimeSpan.Zero);
+        _nextClaimPollAt = now + ClaimMembershipPollInterval;
     }
 
     private IConsumer<string, byte[]> CreateReplyConsumer(string claimGroupId)

@@ -43,7 +43,10 @@ public sealed class RabbitMQBasicConsumerTests
             provider,
             channel.Object,
             brokerId,
-            NullLogger<RabbitMQBasicConsumer>.Instance);
+            NullLogger<RabbitMQBasicConsumer>.Instance)
+        {
+            RequeueDelay = TimeSpan.Zero
+        };
 
         return (consumer, channel, brokerId);
     }
