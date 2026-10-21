@@ -128,7 +128,7 @@ public sealed class KafkaRpcReplyClaimTests
             TimeSpan.FromSeconds(10),
             CancellationToken.None));
 
-        ex.BrokerId.ShouldBe("kafka");
+        ex.BrokerName.ShouldBe("kafka");
         ex.Message.ShouldContain("maximum is exceeded");
         ex.Message.ShouldContain("rpc-replies");
         sessions.Opened.ShouldBeEmpty();
@@ -251,8 +251,7 @@ public sealed class KafkaRpcReplyClaimTests
 
     private static BrokerOptionsBuilder CallerBuilder()
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "setup" };
-        builder.BrokerId = "kafka";
+        var builder = new BrokerOptionsBuilder { BrokerName = "kafka" };
         builder.RpcCallers[typeof(TestMessage)] = typeof(TestReplyMessage);
         return builder;
     }

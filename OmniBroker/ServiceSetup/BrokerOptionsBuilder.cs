@@ -15,14 +15,12 @@ public sealed class BrokerOptionsBuilder
     internal IBrokerExtension Extension { get; set; }
 
     /// <summary>
-    /// Consuming side name for the broker
+    /// Broker name. It is the keyed DI identifier, the RabbitMQ inbound queue prefix, and the Kafka consumer group when GroupId is not set.
     /// </summary>
-    public string SetupName { get; set; } = Guid.NewGuid().ToString();
+    public string BrokerName { get; internal set; } = Guid.NewGuid().ToString();
 
     /// <summary>
     /// Topic/queue name resolver
     /// </summary>
     public INameResolver? NameResolver { get; set; }
-
-    internal string BrokerId { get; set; } = Guid.NewGuid().ToString();
 }

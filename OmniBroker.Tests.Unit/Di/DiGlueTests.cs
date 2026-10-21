@@ -36,7 +36,7 @@ public sealed class DiGlueTests
     [Fact]
     public void UseRabbitMq_sets_extension_and_default_resolver()
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "prefix" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "prefix" };
 
         builder.UseRabbitMq(new RabbitMQSettings
         {
@@ -122,7 +122,7 @@ public sealed class DiGlueTests
             Password = "guest"
         });
         builder.AddProducerFor<TestMessage>();
-        var resolver = new RabbitMQNameResolver(builder.SetupName);
+        var resolver = new RabbitMQNameResolver(builder.BrokerName);
 
         await TopologyDeclarer.EnsureProducersDeclared(connection.Object, resolver, builder);
 
@@ -172,7 +172,7 @@ public sealed class DiGlueTests
             .Returns(Task.CompletedTask);
 
         Mock<IConnection> connection = ConnectionWithChannel(channel);
-        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -180,7 +180,7 @@ public sealed class DiGlueTests
             Password = "guest"
         });
         builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
-        var resolver = new RabbitMQNameResolver(builder.SetupName);
+        var resolver = new RabbitMQNameResolver(builder.BrokerName);
 
         await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder);
 
@@ -246,7 +246,7 @@ public sealed class DiGlueTests
             .Returns(Task.CompletedTask);
 
         Mock<IConnection> connection = ConnectionWithChannel(channel);
-        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -255,7 +255,7 @@ public sealed class DiGlueTests
             DurableQueues = false
         });
         builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
-        var resolver = new RabbitMQNameResolver(builder.SetupName);
+        var resolver = new RabbitMQNameResolver(builder.BrokerName);
 
         await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder, durableQueues: false);
 
@@ -297,7 +297,7 @@ public sealed class DiGlueTests
             .ThrowsAsync(new InvalidOperationException("declare failed"));
 
         Mock<IConnection> connection = ConnectionWithChannel(channel);
-        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -305,7 +305,7 @@ public sealed class DiGlueTests
             Password = "guest"
         });
         builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
-        var resolver = new RabbitMQNameResolver(builder.SetupName);
+        var resolver = new RabbitMQNameResolver(builder.BrokerName);
 
         await Should.ThrowAsync<InvalidOperationException>(() =>
             TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder));
@@ -348,7 +348,7 @@ public sealed class DiGlueTests
             .Returns(Task.CompletedTask);
 
         Mock<IConnection> connection = ConnectionWithChannel(channel);
-        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -357,7 +357,7 @@ public sealed class DiGlueTests
             DeadLetterExchange = "dlx"
         });
         builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
-        var resolver = new RabbitMQNameResolver(builder.SetupName);
+        var resolver = new RabbitMQNameResolver(builder.BrokerName);
 
         await TopologyDeclarer.EnsureConsumersDeclared(connection.Object, resolver, builder, "dlx");
 
@@ -454,7 +454,7 @@ public sealed class DiGlueTests
             .Returns(Task.CompletedTask);
 
         Mock<IConnection> connection = ConnectionWithChannel(channel);
-        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -463,7 +463,7 @@ public sealed class DiGlueTests
             DeadLetterExchange = "dlx"
         });
         builder.AddRpcReceiver<TestMessage, TestReplyMessage>((TestMessage _) => Task.FromResult(new TestReplyMessage()));
-        var resolver = new RabbitMQNameResolver(builder.SetupName);
+        var resolver = new RabbitMQNameResolver(builder.BrokerName);
 
         await TopologyDeclarer.EnsureRpcDeclared(connection.Object, resolver, builder, "dlx");
 
@@ -511,7 +511,7 @@ public sealed class DiGlueTests
     [Fact]
     public async Task RabbitMq_SetupInfrastructure_registers_hosted_service()
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -573,7 +573,7 @@ public sealed class DiGlueTests
             .ReturnsAsync("tag");
 
         Mock<IConnection> connection = ConnectionWithChannel(channel);
-        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
         var settings = new RabbitMQSettings
         {
             HostName = "localhost",
@@ -587,10 +587,10 @@ public sealed class DiGlueTests
 
         var services = new ServiceCollection();
         services.AddSingleton<ILogger<RabbitMQBasicConsumer>>(NullLogger<RabbitMQBasicConsumer>.Instance);
-        services.AddKeyedSingleton<INameResolver>(builder.BrokerId, new RabbitMQNameResolver(builder.SetupName));
-        services.AddKeyedSingleton(builder.BrokerId, settings);
+        services.AddKeyedSingleton<INameResolver>(builder.BrokerName, new RabbitMQNameResolver(builder.BrokerName));
+        services.AddKeyedSingleton(builder.BrokerName, settings);
         var runtime = new RabbitMqRuntime { Connection = connection.Object };
-        services.AddKeyedSingleton(builder.BrokerId, runtime);
+        services.AddKeyedSingleton(builder.BrokerName, runtime);
         await extension.SetupConsumers(services, builder);
         ServiceProvider provider = services.BuildServiceProvider();
 

@@ -60,7 +60,7 @@ internal static class KafkaRpcReplyClaim
         foreach (KafkaPartitionSnapshot partition in reply.Partitions.OrderBy(item => item.PartitionId))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string groupId = KafkaRpcReplyStrings.ForPartition(settings, builder.SetupName, partition.PartitionId);
+            string groupId = KafkaRpcReplyStrings.ForPartition(settings, builder.BrokerName, partition.PartitionId);
             KafkaGroupSnapshot group = await metadata.ReadGroupAsync(groupId, timeout, cancellationToken);
             if (group.Failure is not null)
             {
@@ -110,7 +110,7 @@ internal static class KafkaRpcReplyClaim
         {
             throw new BrokerStateException(
                 brokerId,
-                KafkaRpcReplyStrings.MaximumExceededMessage(topic, KafkaRpcReplyStrings.Prefix(settings, builder.SetupName), reply.Partitions.Count));
+                KafkaRpcReplyStrings.MaximumExceededMessage(topic, KafkaRpcReplyStrings.Prefix(settings, builder.BrokerName), reply.Partitions.Count));
         }
 
         throw new BrokerStateException(brokerId, KafkaRpcReplyStrings.NoLeaderMessage(topic));

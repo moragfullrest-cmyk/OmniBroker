@@ -9,9 +9,9 @@ namespace OmniBroker;
 public interface IBrokerExtension
 {
     /// <summary>
-    /// Broker instance identifier used as the keyed DI key
+    /// Broker name used as the keyed DI key
     /// </summary>
-    string BrokerId { get; }
+    string BrokerName { get; }
 
     /// <summary>
     /// Whether the transport supports RPC

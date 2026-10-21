@@ -22,7 +22,7 @@ public sealed class RabbitMQBasicConsumerTests
         DeadLetterExchange = deadLetterExchange
     };
 
-    private static (RabbitMQBasicConsumer Consumer, Mock<IChannel> Channel, string BrokerId) CreateConsumer(
+    private static (RabbitMQBasicConsumer Consumer, Mock<IChannel> Channel, string BrokerName) CreateConsumer(
         Action<IServiceCollection, string>? configureServices = null,
         string? deadLetterExchange = null)
     {

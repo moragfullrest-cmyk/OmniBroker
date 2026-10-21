@@ -3,10 +3,10 @@ namespace OmniBroker.Infrastructure;
 /// <summary>
 /// Outcome of one broker inside a multi-broker publish.
 /// </summary>
-/// <param name="BrokerId">Keyed broker identifier.</param>
+/// <param name="BrokerName">Broker name.</param>
 /// <param name="ProducerType">Runtime type name of the producer that was invoked.</param>
 /// <param name="Succeeded">Whether that producer accepted the message.</param>
-public sealed record BrokerPublishOutcome(string BrokerId, string ProducerType, bool Succeeded);
+public sealed record BrokerPublishOutcome(string BrokerName, string ProducerType, bool Succeeded);
 
 /// <summary>
 /// Thrown when a multi-broker publish is not atomic: at least one producer failed after one or more others may already have published.
@@ -34,8 +34,8 @@ public sealed class MultiBrokerPublishException : Exception
 
     private static string BuildMessage(Type messageType, IReadOnlyList<BrokerPublishOutcome> outcomes)
     {
-        string failed = string.Join(", ", outcomes.Where(outcome => !outcome.Succeeded).Select(outcome => outcome.BrokerId));
-        string succeeded = string.Join(", ", outcomes.Where(outcome => outcome.Succeeded).Select(outcome => outcome.BrokerId));
+        string failed = string.Join(", ", outcomes.Where(outcome => !outcome.Succeeded).Select(outcome => outcome.BrokerName));
+        string succeeded = string.Join(", ", outcomes.Where(outcome => outcome.Succeeded).Select(outcome => outcome.BrokerName));
         if (string.IsNullOrEmpty(succeeded))
             return $"Publish of {messageType.Name} failed for broker(s): {failed}.";
 

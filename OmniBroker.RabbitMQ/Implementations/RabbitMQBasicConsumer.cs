@@ -67,7 +67,7 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
             message.CorrelationId = properties.CorrelationId;
             message.Tag = routingKey;
             var context = new MessageContext(
-                CurrentBrokerId: _brokerId,
+                CurrentBrokerName: _brokerId,
                 ReplyInfo: string.IsNullOrEmpty(properties.ReplyTo)
                     ? null
                     : new RabbitMQReplyInfo { ReplyTo = properties.ReplyTo },
@@ -157,11 +157,11 @@ internal sealed class RabbitMQBasicConsumer : AsyncDefaultBasicConsumer
 
             BrokerOptionsBuilder? builder = _serviceProvider
                 .GetServices<BrokerOptionsBuilder>()
-                .FirstOrDefault(b => b.BrokerId == _brokerId);
+                .FirstOrDefault(b => b.BrokerName == _brokerId);
 
             if (builder is null)
             {
-                _logger.LogError("Cannot recover RabbitMQ: BrokerOptionsBuilder for {BrokerId} was not found.", _brokerId);
+                _logger.LogError("Cannot recover RabbitMQ: BrokerOptionsBuilder for {BrokerName} was not found.", _brokerId);
                 return;
             }
 

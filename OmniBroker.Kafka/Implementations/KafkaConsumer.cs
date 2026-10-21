@@ -86,7 +86,7 @@ internal sealed class KafkaConsumer : BackgroundService
                 message.Tag = receivedMessage.Message.Key ?? "";
 
                 var context = new MessageContext(
-                    CurrentBrokerId: _brokerId,
+                    CurrentBrokerName: _brokerId,
                     ReplyInfo: ReadReplyInfo(receivedMessage.Message.Headers),
                     CancellationToken: stoppingToken);
                 HandleResult result = HandleResult.Ack;

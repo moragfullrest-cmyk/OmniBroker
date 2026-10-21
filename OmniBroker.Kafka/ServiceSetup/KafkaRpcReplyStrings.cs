@@ -2,11 +2,11 @@ namespace OmniBroker.Kafka.ServiceSetup;
 
 internal static class KafkaRpcReplyStrings
 {
-    internal static string Prefix(KafkaSettings settings, string setupName)
-        => $"{settings.GroupId ?? setupName}.rpc-reply";
+    internal static string Prefix(KafkaSettings settings, string brokerName)
+        => $"{settings.GroupId ?? brokerName}.rpc-reply";
 
-    internal static string ForPartition(KafkaSettings settings, string setupName, int partitionId)
-        => $"{Prefix(settings, setupName)}-{partitionId}";
+    internal static string ForPartition(KafkaSettings settings, string brokerName, int partitionId)
+        => $"{Prefix(settings, brokerName)}-{partitionId}";
 
     internal static bool IsFree(KafkaGroupSnapshot group)
         => group.Failure is null && (group.NotFound || group.Members.Count == 0);

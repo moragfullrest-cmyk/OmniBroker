@@ -13,15 +13,15 @@ namespace OmniBroker.Infrastructure;
 /// </summary>
 public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TMessage : IMessage
 {
-    private readonly List<(string BrokerId, IProducer<TMessage> Producer)> _producers;
+    private readonly List<(string BrokerName, IProducer<TMessage> Producer)> _producers;
     private readonly ILogger<MultiBrokerProducer<TMessage>> _logger;
 
     public MultiBrokerProducer(IServiceProvider services)
     {
         IEnumerable<BrokerOptionsBuilder> builders = services.GetServices<BrokerOptionsBuilder>();
         _producers = [.. builders.SelectMany(builder =>
-            services.GetKeyedServices<IProducer<TMessage>>(builder.BrokerId)
-                .Select(producer => (builder.BrokerId, producer)))];
+            services.GetKeyedServices<IProducer<TMessage>>(builder.BrokerName)
+                .Select(producer => (builder.BrokerName, producer)))];
         _logger = services.GetService<ILogger<MultiBrokerProducer<TMessage>>>()
             ?? NullLogger<MultiBrokerProducer<TMessage>>.Instance;
     }
@@ -71,7 +71,7 @@ public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TM
     private void LogFailure(string brokerId, IProducer<TMessage> producer)
     {
         _logger.LogWarning(
-            "Producer {ProducerType} on broker {BrokerId} failed to publish {MessageType}",
+            "Producer {ProducerType} on broker {BrokerName} failed to publish {MessageType}",
             producer.GetType().Name,
             brokerId,
             typeof(TMessage).Name);

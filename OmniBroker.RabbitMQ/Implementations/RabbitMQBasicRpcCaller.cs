@@ -18,7 +18,7 @@ internal sealed class RabbitMQBasicRpcCaller<TInputMessage, TOutputMessage> : IR
 
     public RabbitMQBasicRpcCaller(IServiceProvider _serviceProvider, string id)
     {
-        _builder = _serviceProvider.GetServices<BrokerOptionsBuilder>().First(_ => _.BrokerId == id);
+        _builder = _serviceProvider.GetServices<BrokerOptionsBuilder>().First(_ => _.BrokerName == id);
         _producer = _serviceProvider.GetRequiredKeyedService<IProducer<TInputMessage>>(id);
         _awaitedOperations = _serviceProvider.GetRequiredKeyedService<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>>(id);
         _nameResolver = _serviceProvider.GetRequiredKeyedService<INameResolver>(id);

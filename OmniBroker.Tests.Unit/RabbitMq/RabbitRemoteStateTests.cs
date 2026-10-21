@@ -58,7 +58,7 @@ public sealed class RabbitRemoteStateTests
         BrokerStateException ex = await Should.ThrowAsync<BrokerStateException>(
             () => extension.ValidateRemoteBrokerState(provider, builder));
 
-        ex.BrokerId.ShouldBe(builder.BrokerId);
+        ex.BrokerName.ShouldBe(builder.BrokerName);
         ex.Message.ShouldContain("refused a channel");
         ex.Message.ShouldNotContain("secret-password");
     }
@@ -106,11 +106,11 @@ public sealed class RabbitRemoteStateTests
 
         (RabbitMQExtension _, BrokerOptionsBuilder builder, ServiceProvider provider) = Create(connection.Object);
         builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
-        var hosted = new RabbitMqBrokerHostedService(provider, builder.BrokerId);
+        var hosted = new RabbitMqBrokerHostedService(provider, builder.BrokerName);
 
         BrokerStateException ex = await Should.ThrowAsync<BrokerStateException>(() => hosted.StartAsync(CancellationToken.None));
 
-        ex.BrokerId.ShouldBe(builder.BrokerId);
+        ex.BrokerName.ShouldBe(builder.BrokerName);
         ex.Message.ShouldContain(replyText);
         ex.InnerException.ShouldBeOfType<OperationInterruptedException>();
         declare.Verify(c => c.BasicConsumeAsync(
@@ -128,8 +128,7 @@ public sealed class RabbitRemoteStateTests
         IConnection connection,
         string password = "guest")
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "orders" };
-        builder.BrokerId = "rabbit";
+        var builder = new BrokerOptionsBuilder { BrokerName = "rabbit" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -140,9 +139,9 @@ public sealed class RabbitRemoteStateTests
         var extension = (RabbitMQExtension)builder.Extension!;
         var runtime = new RabbitMqRuntime { Connection = connection };
         var services = new ServiceCollection();
-        services.AddKeyedSingleton(builder.BrokerId, runtime);
-        services.AddKeyedSingleton(builder.BrokerId, builder);
-        services.AddKeyedSingleton<INameResolver>(builder.BrokerId, new RabbitMQNameResolver(builder.SetupName));
+        services.AddKeyedSingleton(builder.BrokerName, runtime);
+        services.AddKeyedSingleton(builder.BrokerName, builder);
+        services.AddKeyedSingleton<INameResolver>(builder.BrokerName, new RabbitMQNameResolver(builder.BrokerName));
         return (extension, builder, services.BuildServiceProvider());
     }
 

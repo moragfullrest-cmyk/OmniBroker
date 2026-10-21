@@ -29,7 +29,7 @@ public sealed class RabbitMQRpcTests
         BrokerOptionsBuilder Builder) CreateCaller(TimeSpan? timeout = null)
     {
         var brokerId = Guid.NewGuid().ToString();
-        var builder = new BrokerOptionsBuilder { BrokerId = brokerId, SetupName = "rpc-test" };
+        var builder = new BrokerOptionsBuilder { BrokerName = brokerId };
         builder.UseRabbitMq(Settings(timeout));
         ((RabbitMQExtension)builder.Extension!).ReplyQueueName = "reply-q";
 
@@ -43,7 +43,7 @@ public sealed class RabbitMQRpcTests
         services.AddKeyedSingleton(brokerId, builder);
         services.AddKeyedSingleton<IProducer<TestMessage>>(brokerId, producer.Object);
         services.AddKeyedSingleton(brokerId, pending);
-        services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver(builder.SetupName));
+        services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver(builder.BrokerName));
         services.AddKeyedSingleton(brokerId, Settings(timeout));
 
         var caller = new RabbitMQBasicRpcCaller<TestMessage, TestReplyMessage>(services.BuildServiceProvider(), brokerId);
@@ -183,7 +183,7 @@ public sealed class RabbitMQRpcTests
             [(Delegate)(Func<TestMessage, Task<TestReplyMessage>>)(_ => Task.FromResult(new TestReplyMessage { Body = [1] }))])!;
 
         var brokerId = Guid.NewGuid().ToString();
-        var builder = new BrokerOptionsBuilder { BrokerId = brokerId, SetupName = "rpc-test" };
+        var builder = new BrokerOptionsBuilder { BrokerName = brokerId };
         builder.UseRabbitMq(Settings());
 
         var producer = new Mock<IProducer<TestReplyMessage>>();
@@ -211,7 +211,7 @@ public sealed class RabbitMQRpcTests
     public async Task Recover_cancels_pending_rpc()
     {
         var brokerId = Guid.NewGuid().ToString();
-        var builder = new BrokerOptionsBuilder { BrokerId = brokerId, SetupName = "rpc-test" };
+        var builder = new BrokerOptionsBuilder { BrokerName = brokerId };
         builder.UseRabbitMq(Settings());
         var extension = (RabbitMQExtension)builder.Extension!;
         extension.ReplyQueueName = "reply-q";
@@ -231,7 +231,7 @@ public sealed class RabbitMQRpcTests
         services.AddKeyedSingleton(brokerId, builder);
         services.AddKeyedSingleton(brokerId, pending);
         services.AddKeyedSingleton(brokerId, runtime);
-        services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver(builder.SetupName));
+        services.AddKeyedSingleton<INameResolver>(brokerId, new RabbitMQNameResolver(builder.BrokerName));
         ServiceProvider provider = services.BuildServiceProvider();
 
         // Connection and consumer open → RecoverAsync returns early without cancelling.

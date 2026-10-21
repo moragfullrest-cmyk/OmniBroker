@@ -104,7 +104,7 @@ public sealed class RabbitMqRuntimeTests
     [Fact]
     public async Task SetupInfrastructure_does_not_register_IConnection()
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "di" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "di" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -155,10 +155,10 @@ public sealed class RabbitMqRuntimeTests
         };
 
         var services = new ServiceCollection();
-        services.AddKeyedSingleton(builder.BrokerId, runtime);
+        services.AddKeyedSingleton(builder.BrokerName, runtime);
         ServiceProvider provider = services.BuildServiceProvider();
 
-        var hosted = new RabbitMqBrokerHostedService(provider, builder.BrokerId);
+        var hosted = new RabbitMqBrokerHostedService(provider, builder.BrokerName);
         await hosted.StopAsync(CancellationToken.None);
 
         runtime.StoppingToken.IsCancellationRequested.ShouldBeTrue();
@@ -241,7 +241,7 @@ public sealed class RabbitMqRuntimeTests
 
         var services = new ServiceCollection();
         services.AddSingleton<ILogger<RabbitMQExtension>>(logger);
-        services.AddKeyedSingleton(builder.BrokerId, runtime);
+        services.AddKeyedSingleton(builder.BrokerName, runtime);
         ServiceProvider provider = services.BuildServiceProvider();
 
         Task retry = extension.RetryStartAsync(provider, builder, runtime.StoppingToken);
@@ -254,7 +254,7 @@ public sealed class RabbitMqRuntimeTests
 
     private static BrokerOptionsBuilder RabbitBuilder()
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "svc" };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
         builder.UseRabbitMq(new RabbitMQSettings
         {
             HostName = "localhost",
@@ -267,7 +267,7 @@ public sealed class RabbitMqRuntimeTests
     private static ServiceProvider ProviderWithRuntime(BrokerOptionsBuilder builder, RabbitMqRuntime runtime)
     {
         var services = new ServiceCollection();
-        services.AddKeyedSingleton(builder.BrokerId, runtime);
+        services.AddKeyedSingleton(builder.BrokerName, runtime);
         return services.BuildServiceProvider();
     }
 

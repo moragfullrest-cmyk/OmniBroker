@@ -11,11 +11,11 @@ using OmniBroker.Kafka.Implementations;
 
 namespace OmniBroker.Kafka.ServiceSetup;
 
-internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : IBrokerExtension
+internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) : IBrokerExtension
 {
     private bool _consumerRegistered;
 
-    public string BrokerId { get; } = brokerId;
+    public string BrokerName { get; } = brokerName;
     public bool SupportsRpc => true;
 
     public Task SetupConsumers(IServiceCollection services, BrokerOptionsBuilder builder)
@@ -27,7 +27,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
 
         foreach (KeyValuePair<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>>> handler in builder.Consumables)
         {
-            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper(
+            services.AddKeyedSingleton(builder.BrokerName, new HandlerWrapper(
                 MessageType: handler.Key,
                 Handlers: handler.Value,
                 CreateMessage: HandlerWrapper.BuildCreateMessage(handler.Key)));
@@ -38,12 +38,12 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
     public Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder.NameResolver);
-        services.AddKeyedSingleton<INameResolver>(builder.BrokerId, builder.NameResolver);
-        services.AddSingleton<IHostedService>(s => new KafkaBrokerHostedService(s, BrokerId));
+        services.AddKeyedSingleton<INameResolver>(builder.BrokerName, builder.NameResolver);
+        services.AddSingleton<IHostedService>(s => new KafkaBrokerHostedService(s, BrokerName));
         if (builder.RpcCallers.Count > 0)
         {
-            services.AddKeyedSingleton(BrokerId, new KafkaRpcReplyLease());
-            services.AddSingleton<IHostedService>(s => new KafkaRpcReplyLeaseHostedService(s, BrokerId, settings));
+            services.AddKeyedSingleton(BrokerName, new KafkaRpcReplyLease());
+            services.AddSingleton<IHostedService>(s => new KafkaRpcReplyLeaseHostedService(s, BrokerName, settings));
         }
 
         return Task.CompletedTask;
@@ -63,8 +63,8 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
     {
         if (builder.RpcCallers.Count > 0)
         {
-            services.AddKeyedSingleton(BrokerId, settings);
-            services.AddKeyedSingleton(BrokerId, new ConcurrentDictionary<string, KafkaRpcWait>());
+            services.AddKeyedSingleton(BrokerName, settings);
+            services.AddKeyedSingleton(BrokerName, new ConcurrentDictionary<string, KafkaRpcWait>());
             EnsureRawProducer(services);
 
             foreach (KeyValuePair<Type, Type> caller in builder.RpcCallers)
@@ -74,10 +74,10 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
                     Activator.CreateInstance(
                         typeof(KafkaBasicRpcCaller<,>).MakeGenericType(caller.Key, caller.Value),
                         provider,
-                        builder.BrokerId)!;
+                        builder.BrokerName)!;
 
                 services.AddTransient(rpcCallerServiceType, CreateRpcCaller);
-                services.AddKeyedTransient(rpcCallerServiceType, BrokerId, (provider, _) => CreateRpcCaller(provider));
+                services.AddKeyedTransient(rpcCallerServiceType, BrokerName, (provider, _) => CreateRpcCaller(provider));
                 RegisterTypedProducer(services, caller.Key);
             }
         }
@@ -96,7 +96,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
                 .GetMethod(nameof(CreateReplyDelegate), BindingFlags.Static | BindingFlags.NonPublic)!
                 .MakeGenericMethod(returnType)
                 .Invoke(null, [receiver.Value])!;
-            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper(
+            services.AddKeyedSingleton(builder.BrokerName, new HandlerWrapper(
                 MessageType: receiver.Key,
                 Handlers: [OmniBroker.BrokerExtensions.WrapActionDelegate<HandleResult>(reply)],
                 CreateMessage: HandlerWrapper.BuildCreateMessage(receiver.Key)));
@@ -124,7 +124,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
                 throw new InvalidOperationException("RPC reply requires reply topic and partition.");
             }
 
-            OmniBroker.IProducer<TOutput> producer = provider.GetRequiredKeyedService<OmniBroker.IProducer<TOutput>>(context.CurrentBrokerId);
+            OmniBroker.IProducer<TOutput> producer = provider.GetRequiredKeyedService<OmniBroker.IProducer<TOutput>>(context.CurrentBrokerName);
             bool published = await producer.Publish(result, new KafkaPublishOptions(
                 CorrelationId: message.CorrelationId,
                 ReplyTo: null,
@@ -140,13 +140,13 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
             return;
 
         _consumerRegistered = true;
-        services.AddKeyedSingleton(serviceKey: BrokerId, implementationFactory: (IServiceProvider _, object _) =>
+        services.AddKeyedSingleton(serviceKey: BrokerName, implementationFactory: (IServiceProvider _, object _) =>
         {
             var config = new ConsumerConfig
             {
                 BootstrapServers = settings.Hosts,
                 RetryBackoffMs = 100,
-                GroupId = settings.GroupId ?? builder.SetupName,
+                GroupId = settings.GroupId ?? builder.BrokerName,
                 EnableAutoCommit = false,
                 AutoOffsetReset = settings.AutoOffsetReset,
             };
@@ -158,9 +158,9 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
 
         services.Add(HostedService<KafkaConsumer>(s => new KafkaConsumer(
             s,
-            BrokerId,
+            BrokerName,
             s.GetRequiredService<ILogger<KafkaConsumer>>(),
-            s.GetRequiredKeyedService<INameResolver>(BrokerId),
+            s.GetRequiredKeyedService<INameResolver>(BrokerName),
             settings)));
     }
 
@@ -178,13 +178,13 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
     private void EnsureRawProducer(IServiceCollection services)
     {
         if (services.Any(descriptor => descriptor.IsKeyedService
-            && Equals(descriptor.ServiceKey, BrokerId)
+            && Equals(descriptor.ServiceKey, BrokerName)
             && descriptor.ServiceType == typeof(IProducer<string, byte[]>)))
         {
             return;
         }
 
-        services.AddKeyedSingleton<IProducer<string, byte[]>>(serviceKey: BrokerId, implementationFactory: (IServiceProvider _, object _) =>
+        services.AddKeyedSingleton<IProducer<string, byte[]>>(serviceKey: BrokerName, implementationFactory: (IServiceProvider _, object _) =>
         {
             var config = new ProducerConfig
             {
@@ -204,7 +204,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
     private void RegisterTypedProducer(IServiceCollection services, Type messageType)
     {
         services.TryAddMultiBrokerProducer(messageType);
-        services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(messageType), BrokerId, (provider, key) =>
+        services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(messageType), BrokerName, (provider, key) =>
         {
             Type producerType = typeof(KafkaProducer<>).MakeGenericType(messageType);
             return Activator.CreateInstance(producerType,
@@ -230,7 +230,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
         if (builder.RpcCallers.Count > 0 && string.IsNullOrWhiteSpace(settings.RpcReplyTopic))
         {
             throw new BrokerStateException(
-                BrokerId,
+                BrokerName,
                 KafkaRpcReplyStrings.MissingTopicMessage());
         }
 
@@ -249,12 +249,12 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
         catch (Exception ex)
         {
             throw new BrokerStateException(
-                BrokerId,
+                BrokerName,
                 $"Kafka cluster '{settings.Hosts}' is unreachable.",
                 ex);
         }
 
-        INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerId);
+        INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerName);
         Dictionary<string, KafkaTopicSnapshot> snapshots = await ReadTopicsAsync(nameResolver, builder, metadata);
         await EnsureReplyPartitionAsync(builder, metadata, snapshots);
     }
@@ -295,7 +295,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
         }
 
         if (missing.Count > 0 || unauthorized.Count > 0 || other.Count > 0)
-            throw new BrokerStateException(BrokerId, FormatTopicProblems(missing, unauthorized, other));
+            throw new BrokerStateException(BrokerName, FormatTopicProblems(missing, unauthorized, other));
 
         return snapshots;
     }
@@ -314,7 +314,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
         bool anyUnoccupied = false;
         foreach (KafkaPartitionSnapshot partition in reply.Partitions.OrderBy(item => item.PartitionId))
         {
-            string groupId = KafkaRpcReplyStrings.ForPartition(settings, builder.SetupName, partition.PartitionId);
+            string groupId = KafkaRpcReplyStrings.ForPartition(settings, builder.BrokerName, partition.PartitionId);
             KafkaGroupSnapshot group = await metadata.ReadGroupAsync(
                 groupId,
                 KafkaAdminMetadataClient.Timeout,
@@ -322,7 +322,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
             if (group.Failure is not null)
             {
                 throw new BrokerStateException(
-                    BrokerId,
+                    BrokerName,
                     KafkaRpcReplyStrings.GroupFailureMessage(groupId, topic, group.Failure));
             }
 
@@ -343,12 +343,12 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
         if (!anyUnoccupied)
         {
             throw new BrokerStateException(
-                BrokerId,
-                KafkaRpcReplyStrings.MaximumExceededMessage(topic, KafkaRpcReplyStrings.Prefix(settings, builder.SetupName), reply.Partitions.Count));
+                BrokerName,
+                KafkaRpcReplyStrings.MaximumExceededMessage(topic, KafkaRpcReplyStrings.Prefix(settings, builder.BrokerName), reply.Partitions.Count));
         }
 
         throw new BrokerStateException(
-            BrokerId,
+            BrokerName,
             KafkaRpcReplyStrings.NoLeaderMessage(topic));
     }
 
@@ -365,6 +365,6 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerId) : 
         if (other.Count > 0)
             parts.Add($"unusable topic(s): {string.Join(", ", other)}");
 
-        return $"Kafka broker '{BrokerId}' cannot use the configured topics. {string.Join("; ", parts)}.";
+        return $"Kafka broker '{BrokerName}' cannot use the configured topics. {string.Join("; ", parts)}.";
     }
 }

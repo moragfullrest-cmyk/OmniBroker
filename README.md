@@ -52,7 +52,12 @@ var host = builder.Build();
 host.Run();
 ```
 
-Named brokers use the name as the keyed DI identifier. `SetupName` (queue prefix / Kafka group fallback) defaults to that name and can be overridden **before** `UseRabbitMq` / `UseKafka`.
+The name passed to `AddBroker` is `BrokerName`: the keyed DI identifier, the RabbitMQ inbound queue prefix, and the Kafka consumer group when `KafkaSettings.GroupId` is not set. A different RabbitMQ prefix is an explicit resolver assigned before `UseRabbitMq`:
+
+```csharp
+options.NameResolver = new OmniBroker.RabbitMQ.Implementations.RabbitMQNameResolver("somename");
+options.UseRabbitMq(settings);
+```
 
 ```csharp
 IProducer<OrderMessage> all; // MultiBrokerProducer: publishes to every broker registered for this type

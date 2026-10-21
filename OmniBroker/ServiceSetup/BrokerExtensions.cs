@@ -15,7 +15,8 @@ public static class BrokerExtensions
         => AddBrokerCore(services, name: null, optionsAction);
 
     /// <summary>
-    /// Entry point for named broker configuration. The name is the keyed DI identifier.
+    /// Entry point for named broker configuration.
+    /// The name is the keyed DI identifier, the RabbitMQ inbound queue prefix, and the Kafka consumer group when GroupId is not set.
     /// </summary>
     /// <param name="name">Broker name used as the <c>[FromKeyedServices]</c> key.</param>
     public static IServiceCollection AddBroker(this IServiceCollection services, string name, Action<BrokerOptionsBuilder> optionsAction)
@@ -30,17 +31,14 @@ public static class BrokerExtensions
 
         var options = new BrokerOptionsBuilder();
         if (string.IsNullOrWhiteSpace(name) == false)
-        {
-            options.BrokerId = name;
-            options.SetupName = name;
-        }
+            options.BrokerName = name;
 
         optionsAction(options);
 
         ArgumentNullException.ThrowIfNull(options.Extension);
 
-        if (services.Any(d => d.IsKeyedService && d.ServiceKey is string key && key == options.BrokerId && d.ServiceType == typeof(BrokerOptionsBuilder)))
-            throw new ArgumentException($"Broker '{options.BrokerId}' is already registered.");
+        if (services.Any(d => d.IsKeyedService && d.ServiceKey is string key && key == options.BrokerName && d.ServiceType == typeof(BrokerOptionsBuilder)))
+            throw new ArgumentException($"Broker '{options.BrokerName}' is already registered.");
 
         if ((options.RpcCallers.Count > 0 || options.RpcReceivers.Count > 0) && !options.Extension.SupportsRpc)
         {
@@ -55,7 +53,7 @@ public static class BrokerExtensions
 
         // Required for startup — keep in the service list
         services.AddSingleton(options);
-        services.AddKeyedSingleton(options.BrokerId, options);
+        services.AddKeyedSingleton(options.BrokerName, options);
         return services;
     }
 
@@ -242,7 +240,7 @@ public static class BrokerExtensions
             if (_.ParameterType == typeof(CancellationToken))
                 return Expression.Property(contextParamExp, nameof(MessageContext.CancellationToken));
 
-            // 1) soft keyed by CurrentBrokerId (broker infrastructure)
+            // 1) soft keyed by CurrentBrokerName (broker infrastructure)
             // 2) required keyed by [FromKeyedServices] if present
             // 3) otherwise required unkeyed
             MethodInfo getKeyedService = GetKeyedServiceOpen.MakeGenericMethod(_.ParameterType);
@@ -250,7 +248,7 @@ public static class BrokerExtensions
             Expression softBrokerCall = Expression.Call(
                 getKeyedService,
                 provParamExp,
-                Expression.Property(contextParamExp, nameof(MessageContext.CurrentBrokerId)));
+                Expression.Property(contextParamExp, nameof(MessageContext.CurrentBrokerName)));
 
             FromKeyedServicesAttribute? keyedAttr = _.GetCustomAttribute<FromKeyedServicesAttribute>();
             Expression fallbackCall;

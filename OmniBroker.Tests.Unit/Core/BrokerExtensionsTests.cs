@@ -129,7 +129,7 @@ public sealed class BrokerExtensionsTests
         HandleResult result = await handler(
             new ServiceCollection().BuildServiceProvider(),
             new TestMessage(),
-            new MessageContext(builder.BrokerId, null, cts.Token));
+            new MessageContext(builder.BrokerName, null, cts.Token));
 
         result.ShouldBe(HandleResult.Ack);
         captured.ShouldBe(cts.Token);

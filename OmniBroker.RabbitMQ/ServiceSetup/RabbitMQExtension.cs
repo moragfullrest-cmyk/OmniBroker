@@ -11,28 +11,28 @@ using RabbitMQ.Client.Exceptions;
 
 namespace OmniBroker.RabbitMQ.ServiceSetup;
 
-internal sealed class RabbitMQExtension(RabbitMQSettings settings, string brokerId) : IBrokerExtension
+internal sealed class RabbitMQExtension(RabbitMQSettings settings, string brokerName) : IBrokerExtension
 {
     private readonly HashSet<Type> _replyTypes = [];
-    public string BrokerId { get; } = brokerId;
+    public string BrokerName { get; } = brokerName;
     public string ReplyQueueName { get; set; } = null!;
     public bool SupportsRpc => true;
 
     public Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
     {
-        services.AddKeyedSingleton(BrokerId, settings);
-        services.AddKeyedSingleton(BrokerId, new RabbitMqRuntime());
+        services.AddKeyedSingleton(BrokerName, settings);
+        services.AddKeyedSingleton(BrokerName, new RabbitMqRuntime());
 
-        services.AddKeyedSingleton(BrokerId, (s, _) =>
+        services.AddKeyedSingleton(BrokerName, (s, _) =>
         {
-            RabbitMqRuntime runtime = s.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+            RabbitMqRuntime runtime = s.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
             return runtime.RequireChannelPool();
         });
 
-        services.AddKeyedSingleton<INameResolver>(BrokerId, builder.NameResolver!);
+        services.AddKeyedSingleton<INameResolver>(BrokerName, builder.NameResolver!);
 
         services.AddSingleton<IHostedService, RabbitMqBrokerHostedService>(s =>
-            new RabbitMqBrokerHostedService(s, BrokerId));
+            new RabbitMqBrokerHostedService(s, BrokerName));
 
         return Task.CompletedTask;
     }
@@ -41,7 +41,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
     {
         foreach (KeyValuePair<Type, List<Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>>> handler in builder.Consumables)
         {
-            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper(
+            services.AddKeyedSingleton(builder.BrokerName, new HandlerWrapper(
                 MessageType: handler.Key,
                 Handlers: handler.Value,
                 CreateMessage: HandlerWrapper.BuildCreateMessage(handler.Key)));
@@ -52,17 +52,17 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
     public Task SetupRpc(IServiceCollection services, BrokerOptionsBuilder builder)
     {
-        services.AddKeyedSingleton(BrokerId, new ConcurrentDictionary<string, TaskCompletionSource<IMessage>>());
+        services.AddKeyedSingleton(BrokerName, new ConcurrentDictionary<string, TaskCompletionSource<IMessage>>());
 
         foreach (var t in builder.RpcCallers)
         {
             Type rpcCallerServiceType = typeof(IRpcCaller<,>).MakeGenericType(t.Key, t.Value);
             object CreateRpcCaller(IServiceProvider s) =>
-                Activator.CreateInstance(typeof(RabbitMQBasicRpcCaller<,>).MakeGenericType(t.Key, t.Value), s, builder.BrokerId)!;
+                Activator.CreateInstance(typeof(RabbitMQBasicRpcCaller<,>).MakeGenericType(t.Key, t.Value), s, builder.BrokerName)!;
 
             services.AddTransient(rpcCallerServiceType, CreateRpcCaller);
-            services.AddKeyedTransient(rpcCallerServiceType, BrokerId, (s, _) => CreateRpcCaller(s));
-            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(t.Key), BrokerId, (s, obj) =>
+            services.AddKeyedTransient(rpcCallerServiceType, BrokerName, (s, _) => CreateRpcCaller(s));
+            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(t.Key), BrokerName, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(t.Key);
                 return Activator.CreateInstance(producerType,
@@ -71,7 +71,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
                     s.GetRequiredKeyedService<INameResolver>(obj))!;
             });
 
-            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper
+            services.AddKeyedSingleton(builder.BrokerName, new HandlerWrapper
             (
                 MessageType: t.Value,
                 Handlers:
@@ -88,7 +88,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         foreach (var t in builder.RpcReceivers)
         {
             var returnType = t.Value.Method.ReturnType.GenericTypeArguments[0];
-            services.AddKeyedSingleton(builder.BrokerId, new HandlerWrapper
+            services.AddKeyedSingleton(builder.BrokerName, new HandlerWrapper
             (
                 MessageType: t.Key,
                 Handlers:
@@ -99,7 +99,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
                 ],
                 CreateMessage: HandlerWrapper.BuildCreateMessage(t.Key)
             ));
-            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(returnType), BrokerId, (s, obj) =>
+            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(returnType), BrokerName, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(returnType);
                 return Activator.CreateInstance(producerType,
@@ -138,8 +138,8 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
             if (result is null)
                 throw new InvalidOperationException("RPC reply message must not be null.");
 
-            var producer = provider.GetRequiredKeyedService<IProducer<TOutput>>(context.CurrentBrokerId);
-            var builder = provider.GetRequiredKeyedService<BrokerOptionsBuilder>(context.CurrentBrokerId);
+            var producer = provider.GetRequiredKeyedService<IProducer<TOutput>>(context.CurrentBrokerName);
+            var builder = provider.GetRequiredKeyedService<BrokerOptionsBuilder>(context.CurrentBrokerName);
             if (context.ReplyInfo is not RabbitMQReplyInfo replyInfo
                 || string.IsNullOrEmpty(replyInfo.ReplyTo))
             {
@@ -161,7 +161,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         foreach (Type type in builder.Producables)
         {
             services.TryAddMultiBrokerProducer(type);
-            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(type), BrokerId, (s, obj) =>
+            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(type), BrokerName, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(type);
                 return Activator.CreateInstance(producerType,
@@ -177,7 +177,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
     public async Task ValidateRemoteBrokerState(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
-        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
         runtime.StoppingToken.ThrowIfCancellationRequested();
 
         try
@@ -190,7 +190,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         }
         catch (Exception ex)
         {
-            throw new BrokerStateException(BrokerId, ConnectionFailureMessage(), ex);
+            throw new BrokerStateException(BrokerName, ConnectionFailureMessage(), ex);
         }
 
         try
@@ -207,13 +207,13 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         }
         catch (Exception ex)
         {
-            throw new BrokerStateException(BrokerId, ChannelFailureMessage(), ex);
+            throw new BrokerStateException(BrokerName, ChannelFailureMessage(), ex);
         }
     }
 
     public async Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     {
-        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
         runtime.StoppingToken.ThrowIfCancellationRequested();
 
         await EnsureConnectionAsync(runtime);
@@ -225,7 +225,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
                 settings.MaxChannelPoolSize);
         }
 
-        INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerId);
+        INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerName);
         IConnection connection = runtime.RequireConnection();
         try
         {
@@ -236,7 +236,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         catch (OperationInterruptedException ex) when (IsUnfixableRemoteState(ex))
         {
             throw new BrokerStateException(
-                BrokerId,
+                BrokerName,
                 $"RabbitMQ refused topology that cannot be changed from code. ReplyCode={ex.ShutdownReason!.ReplyCode}, ReplyText={ex.ShutdownReason.ReplyText}.",
                 ex);
         }
@@ -304,7 +304,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
     /// </summary>
     internal async Task RecoverAsync(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
     {
-        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+        RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
         CancellationToken cancellationToken = runtime.StoppingToken;
         if (cancellationToken.IsCancellationRequested)
             return;
@@ -395,7 +395,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
     private void CancelPendingRpc(IServiceProvider serviceProvider)
     {
-        var pending = serviceProvider.GetRequiredKeyedService<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>>(BrokerId);
+        var pending = serviceProvider.GetRequiredKeyedService<ConcurrentDictionary<string, TaskCompletionSource<IMessage>>>(BrokerName);
         foreach (var pair in pending)
         {
             if (pending.TryRemove(pair.Key, out TaskCompletionSource<IMessage>? tcs))
@@ -408,11 +408,11 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
     public async Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder)
     {
-        IEnumerable<HandlerWrapper> handlers = services.GetKeyedServices<HandlerWrapper>(BrokerId);
+        IEnumerable<HandlerWrapper> handlers = services.GetKeyedServices<HandlerWrapper>(BrokerName);
         if (handlers.Any() == false && builder.RpcCallers.Count == 0)
             return;
 
-        RabbitMqRuntime runtime = services.GetRequiredKeyedService<RabbitMqRuntime>(BrokerId);
+        RabbitMqRuntime runtime = services.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
         if (runtime.ConsumerChannel is { IsOpen: true })
             return;
 
@@ -421,11 +421,11 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         runtime.ConsumerChannel = channel;
 
         await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: settings.PrefetchCount, global: false);
-        INameResolver resolver = services.GetRequiredKeyedService<INameResolver>(BrokerId);
+        INameResolver resolver = services.GetRequiredKeyedService<INameResolver>(BrokerName);
         var consumer = new RabbitMQBasicConsumer(
             services,
             channel,
-            builder.BrokerId,
+            builder.BrokerName,
             services.GetRequiredService<ILogger<RabbitMQBasicConsumer>>());
 
         bool replyQueueConsumed = false;

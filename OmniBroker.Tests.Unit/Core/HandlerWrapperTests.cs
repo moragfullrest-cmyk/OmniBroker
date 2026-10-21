@@ -42,8 +42,8 @@ public sealed class HandlerWrapperTests
                     return Task.FromResult(HandleResult.Ack);
                 });
 
-        // FromKeyedServices is only used when soft lookup by CurrentBrokerId returns null.
-        var otherBrokerId = Guid.NewGuid().ToString();
+        // FromKeyedServices is only used when soft lookup by CurrentBrokerName returns null.
+        var otherBrokerName = Guid.NewGuid().ToString();
         Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> fromKeyed =
             BrokerExtensions.WrapActionDelegate<HandleResult>(
                 ([FromKeyedServices("explicit-key")] TestDependency dep, TestMessage message) =>
@@ -53,7 +53,7 @@ public sealed class HandlerWrapperTests
                 });
 
         (await softKeyed(provider, new TestMessage(), new MessageContext(brokerId, null))).ShouldBe(HandleResult.Ack);
-        (await fromKeyed(provider, new TestMessage(), new MessageContext(otherBrokerId, null))).ShouldBe(HandleResult.Ack);
+        (await fromKeyed(provider, new TestMessage(), new MessageContext(otherBrokerName, null))).ShouldBe(HandleResult.Ack);
     }
 
     [Fact]

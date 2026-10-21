@@ -30,7 +30,7 @@ public sealed class KafkaRemoteStateTests
         BrokerStateException ex = await Should.ThrowAsync<BrokerStateException>(
             () => extension.ValidateRemoteBrokerState(provider, builder, metadata.Object));
 
-        ex.BrokerId.ShouldBe("kafka");
+        ex.BrokerName.ShouldBe("kafka");
         ex.Message.ShouldContain("unreachable");
         ex.Message.ShouldNotContain("sasl-secret");
         metadata.Verify(m => m.ReadTopicAsync(It.IsAny<string>(), It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -161,8 +161,7 @@ public sealed class KafkaRemoteStateTests
                 Hosts = "localhost:9092",
                 GroupId = "workers",
                 RpcReplyTopic = "rpc-replies"
-            },
-            setupName: "setup");
+            });
         builder.RpcCallers[typeof(TestMessage)] = typeof(TestReplyMessage);
 
         BrokerStateException ex = await Should.ThrowAsync<BrokerStateException>(
@@ -183,7 +182,7 @@ public sealed class KafkaRemoteStateTests
     public async Task ValidateRemoteBrokerState_reply_group_failure_throws()
     {
         var metadata = ReadyMetadata(_ => Topic("rpc-replies", new KafkaPartitionSnapshot(0, HasLeader: true)));
-        metadata.Setup(m => m.ReadGroupAsync("setup.rpc-reply-0", It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+        metadata.Setup(m => m.ReadGroupAsync("kafka.rpc-reply-0", It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new KafkaGroupSnapshot(NotFound: false, Failure: "denied", Members: []));
         (KafkaExtension extension, BrokerOptionsBuilder builder, ServiceProvider provider) = Create(new KafkaSettings
         {
@@ -197,7 +196,7 @@ public sealed class KafkaRemoteStateTests
 
         ex.Message.ShouldContain("cannot be read");
         ex.Message.ShouldContain("denied");
-        ex.Message.ShouldContain("setup.rpc-reply-0");
+        ex.Message.ShouldContain("kafka.rpc-reply-0");
     }
 
     [Fact]
@@ -222,7 +221,7 @@ public sealed class KafkaRemoteStateTests
     public async Task ValidateRemoteBrokerState_free_partition_without_leader_throws()
     {
         var metadata = ReadyMetadata(_ => Topic("rpc-replies", new KafkaPartitionSnapshot(0, HasLeader: false)));
-        metadata.Setup(m => m.ReadGroupAsync("setup.rpc-reply-0", It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+        metadata.Setup(m => m.ReadGroupAsync("kafka.rpc-reply-0", It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new KafkaGroupSnapshot(NotFound: true, Failure: null, Members: []));
         (KafkaExtension extension, BrokerOptionsBuilder builder, ServiceProvider provider) = Create(new KafkaSettings
         {
@@ -240,8 +239,7 @@ public sealed class KafkaRemoteStateTests
     [Fact]
     public async Task SetupInfrastructure_registers_validation_before_consumer()
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "setup" };
-        builder.BrokerId = "kafka";
+        var builder = new BrokerOptionsBuilder { BrokerName = "kafka" };
         builder.UseKafka(new KafkaSettings { Hosts = "localhost:9092" });
         builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
         var extension = (KafkaExtension)builder.Extension!;
@@ -260,8 +258,7 @@ public sealed class KafkaRemoteStateTests
     [Fact]
     public async Task SetupInfrastructure_registers_reply_lease_before_consumer_when_callers_exist()
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "setup" };
-        builder.BrokerId = "kafka";
+        var builder = new BrokerOptionsBuilder { BrokerName = "kafka" };
         builder.UseKafka(new KafkaSettings { Hosts = "localhost:9092", RpcReplyTopic = "rpc-replies" });
         builder.RpcCallers[typeof(TestMessage)] = typeof(TestReplyMessage);
         builder.AddConsumerFor<AnotherTestMessage>((AnotherTestMessage _) => Task.FromResult(HandleResult.Ack));
@@ -285,8 +282,7 @@ public sealed class KafkaRemoteStateTests
     [Fact]
     public async Task SetupInfrastructure_receiver_only_does_not_register_reply_lease()
     {
-        var builder = new BrokerOptionsBuilder { SetupName = "setup" };
-        builder.BrokerId = "kafka";
+        var builder = new BrokerOptionsBuilder { BrokerName = "kafka" };
         builder.UseKafka(new KafkaSettings { Hosts = "localhost:9092", RpcReplyTopic = "rpc-replies" });
         builder.RpcReceivers[typeof(TestMessage)] = (Func<TestMessage, Task<TestReplyMessage>>)(_ => Task.FromResult(new TestReplyMessage()));
         var extension = (KafkaExtension)builder.Extension!;
@@ -315,15 +311,13 @@ public sealed class KafkaRemoteStateTests
         => new(name, Unknown: false, AuthorizationFailed: false, OtherError: null, Partitions: partitions);
 
     private static (KafkaExtension Extension, BrokerOptionsBuilder Builder, ServiceProvider Provider) Create(
-        KafkaSettings settings,
-        string setupName = "setup")
+        KafkaSettings settings)
     {
-        var builder = new BrokerOptionsBuilder { SetupName = setupName };
-        builder.BrokerId = "kafka";
+        var builder = new BrokerOptionsBuilder { BrokerName = "kafka" };
         builder.UseKafka(settings);
         var extension = (KafkaExtension)builder.Extension!;
         var services = new ServiceCollection();
-        services.AddKeyedSingleton<INameResolver>(builder.BrokerId, new KafkaNameResolver());
+        services.AddKeyedSingleton<INameResolver>(builder.BrokerName, new KafkaNameResolver());
         return (extension, builder, services.BuildServiceProvider());
     }
 }

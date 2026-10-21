@@ -12,13 +12,13 @@ public sealed class MultiBrokerProducerTests
     private static MultiBrokerProducer<TestMessage> Create(params IProducer<TestMessage>[] producers)
         => CreateWithIds(producers).Sut;
 
-    private static (MultiBrokerProducer<TestMessage> Sut, string[] BrokerIds) CreateWithIds(params IProducer<TestMessage>[] producers)
+    private static (MultiBrokerProducer<TestMessage> Sut, string[] BrokerNames) CreateWithIds(params IProducer<TestMessage>[] producers)
     {
         var brokerIds = producers.Select(_ => Guid.NewGuid().ToString()).ToArray();
         var builders = brokerIds.Select(id =>
         {
             var builder = new BrokerOptionsBuilder();
-            builder.BrokerId = id;
+            builder.BrokerName = id;
             return builder;
         }).ToArray();
 
@@ -126,8 +126,8 @@ public sealed class MultiBrokerProducerTests
 
         var firstId = Guid.NewGuid().ToString();
         var secondId = Guid.NewGuid().ToString();
-        var firstBuilder = new BrokerOptionsBuilder { BrokerId = firstId };
-        var secondBuilder = new BrokerOptionsBuilder { BrokerId = secondId };
+        var firstBuilder = new BrokerOptionsBuilder { BrokerName = firstId };
+        var secondBuilder = new BrokerOptionsBuilder { BrokerName = secondId };
 
         var services = new ServiceCollection();
         services.AddSingleton(firstBuilder);
@@ -140,7 +140,7 @@ public sealed class MultiBrokerProducerTests
 
         MultiBrokerPublishException ex = await Should.ThrowAsync<MultiBrokerPublishException>(() => sut.Publish(new TestMessage()));
 
-        ex.Outcomes.Single(outcome => outcome.BrokerId == secondId).Succeeded.ShouldBeFalse();
+        ex.Outcomes.Single(outcome => outcome.BrokerName == secondId).Succeeded.ShouldBeFalse();
         logger.Verify(
             x => x.Log(
                 LogLevel.Warning,

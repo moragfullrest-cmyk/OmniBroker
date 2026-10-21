@@ -12,7 +12,7 @@ public static class BrokerExtensions
         ArgumentNullException.ThrowIfNull(optionsBuilder);
         ArgumentNullException.ThrowIfNull(settings);
 
-        optionsBuilder.Extension = new KafkaExtension(settings, optionsBuilder.BrokerId);
+        optionsBuilder.Extension = new KafkaExtension(settings, optionsBuilder.BrokerName);
         optionsBuilder.NameResolver ??= new KafkaNameResolver();
         return optionsBuilder;
     }

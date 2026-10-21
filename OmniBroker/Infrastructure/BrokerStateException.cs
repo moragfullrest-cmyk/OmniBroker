@@ -8,29 +8,29 @@ public sealed class BrokerStateException : Exception
     /// <summary>
     /// Creates an exception for a broker that failed a remote state check.
     /// </summary>
-    /// <param name="brokerId">Keyed broker identifier.</param>
+    /// <param name="brokerName">Broker name.</param>
     /// <param name="message">Condition that failed. Must not contain credentials.</param>
-    public BrokerStateException(string brokerId, string message)
-        : this(brokerId, message, null)
+    public BrokerStateException(string brokerName, string message)
+        : this(brokerName, message, null)
     {
     }
 
     /// <summary>
     /// Creates an exception for a broker that failed a remote state check.
     /// </summary>
-    /// <param name="brokerId">Keyed broker identifier.</param>
+    /// <param name="brokerName">Broker name.</param>
     /// <param name="message">Condition that failed. Must not contain credentials.</param>
     /// <param name="innerException">Broker client exception that caused the failure.</param>
-    public BrokerStateException(string brokerId, string message, Exception? innerException)
+    public BrokerStateException(string brokerName, string message, Exception? innerException)
         : base(message, innerException)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(brokerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(brokerName);
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
-        BrokerId = brokerId;
+        BrokerName = brokerName;
     }
 
     /// <summary>
-    /// Keyed broker identifier.
+    /// Broker name.
     /// </summary>
-    public string BrokerId { get; }
+    public string BrokerName { get; }
 }
