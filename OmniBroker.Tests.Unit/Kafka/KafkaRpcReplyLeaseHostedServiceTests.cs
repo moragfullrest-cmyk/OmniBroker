@@ -48,6 +48,41 @@ public sealed class KafkaRpcReplyLeaseHostedServiceTests
         replies.Verify(c => c.Consume(TimeSpan.FromMilliseconds(100)), Times.Exactly(4));
     }
 
+    [Fact]
+    public void AssignReplyStart_uses_high_watermark_and_marks_ready_after_assign()
+    {
+        var replies = new Mock<IConsumer<string, byte[]>>();
+        var marks = new WatermarkOffsets(new Offset(1), new Offset(42));
+        TopicPartitionOffset? assigned = null;
+        bool readyDuringAssign = true;
+        var lease = new KafkaRpcReplyLease();
+        replies.Setup(c => c.QueryWatermarkOffsets(It.IsAny<TopicPartition>(), It.IsAny<TimeSpan>()))
+            .Returns(marks);
+        replies.Setup(c => c.Assign(It.IsAny<TopicPartitionOffset>()))
+            .Callback<TopicPartitionOffset>(offset =>
+            {
+                assigned = offset;
+                readyDuringAssign = lease.Ready.IsCompleted;
+            });
+        var sut = new KafkaRpcReplyLeaseHostedService(
+            new ServiceCollection().BuildServiceProvider(),
+            "kafka",
+            new KafkaSettings { Hosts = "localhost:9092", RpcReplyTopic = "rpc-replies" });
+
+        sut.AssignReplyStart(replies.Object, "rpc-replies", 3, lease);
+
+        readyDuringAssign.ShouldBeFalse();
+        lease.Ready.IsCompletedSuccessfully.ShouldBeTrue();
+        assigned.ShouldNotBeNull();
+        assigned.Topic.ShouldBe("rpc-replies");
+        assigned.Partition.Value.ShouldBe(3);
+        assigned.Offset.ShouldBe(new Offset(42));
+        replies.Verify(c => c.Assign(It.IsAny<TopicPartitionOffset>()), Times.Once);
+        replies.Verify(
+            c => c.Assign(It.Is<TopicPartitionOffset>(offset => offset.Offset == Offset.End)),
+            Times.Never);
+    }
+
     private static async Task RunExecuteAsync(KafkaRpcReplyLeaseHostedService sut, CancellationToken token)
     {
         MethodInfo method = typeof(KafkaRpcReplyLeaseHostedService)

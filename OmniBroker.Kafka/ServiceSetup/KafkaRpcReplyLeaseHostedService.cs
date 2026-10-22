@@ -51,12 +51,8 @@ internal sealed class KafkaRpcReplyLeaseHostedService(
             lease.Claim(hold.PartitionId, hold.GroupId);
             _session = hold.Session;
             _replies = CreateReplyConsumer(hold.GroupId);
-            _replies.Assign(new TopicPartitionOffset(
-                settings.RpcReplyTopic!,
-                new Partition(hold.PartitionId),
-                Offset.End));
+            AssignReplyStart(_replies, settings.RpcReplyTopic!, hold.PartitionId, lease);
             await base.StartAsync(cancellationToken);
-            lease.MarkReady();
         }
         catch (Exception ex)
         {
@@ -117,6 +113,22 @@ internal sealed class KafkaRpcReplyLeaseHostedService(
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Freezes the reply reader at the current high watermark, then marks the lease ready.
+    /// <see cref="Offset.End"/> would be resolved on the first consume, after callers are already allowed to publish.
+    /// </summary>
+    internal void AssignReplyStart(
+        IConsumer<string, byte[]> replies,
+        string topic,
+        int partitionId,
+        KafkaRpcReplyLease lease)
+    {
+        var partition = new TopicPartition(topic, new Partition(partitionId));
+        WatermarkOffsets marks = replies.QueryWatermarkOffsets(partition, KafkaAdminMetadataClient.Timeout);
+        replies.Assign(new TopicPartitionOffset(partition, marks.High));
+        lease.MarkReady();
     }
 
     private void PollClaimMembershipIfDue()

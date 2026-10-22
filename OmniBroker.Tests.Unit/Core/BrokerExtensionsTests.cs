@@ -7,6 +7,8 @@ using OmniBroker.Kafka.ServiceSetup;
 using OmniBroker.RabbitMQ;
 using OmniBroker.RabbitMQ.ServiceSetup;
 using OmniBroker.Tests.Unit.Fixtures;
+using LeftWire = OmniBroker.Tests.Unit.Fixtures.Left;
+using RightWire = OmniBroker.Tests.Unit.Fixtures.Right;
 using Shouldly;
 
 namespace OmniBroker.Tests.Unit.Core;
@@ -328,5 +330,134 @@ public sealed class BrokerExtensionsTests
             .ShouldBeTrue();
         services.Any(d => !d.IsKeyedService && d.ServiceType == typeof(IRpcCaller<TestMessage, TestReplyMessage>))
             .ShouldBeTrue();
+    }
+
+    [Fact]
+    public void AddRpcReceiver_duplicate_output_throws()
+    {
+        var builder = new BrokerOptionsBuilder();
+        builder.UseRabbitMq(RabbitSettings());
+        builder.AddRpcReceiver<TestMessage, TestReplyMessage>((TestMessage _) => Task.FromResult(new TestReplyMessage()));
+
+        Should.Throw<ArgumentException>(() => builder.AddRpcReceiver<AnotherTestMessage, TestReplyMessage>(
+            (AnotherTestMessage _) => Task.FromResult(new TestReplyMessage())));
+    }
+
+    [Fact]
+    public void AddRpcCaller_when_receiver_already_returns_output_throws()
+    {
+        var builder = new BrokerOptionsBuilder();
+        builder.UseRabbitMq(RabbitSettings());
+        builder.AddRpcReceiver<TestMessage, TestReplyMessage>((TestMessage _) => Task.FromResult(new TestReplyMessage()));
+
+        Should.Throw<ArgumentException>(() => builder.AddRpcCaller<AnotherTestMessage, TestReplyMessage>());
+    }
+
+    [Fact]
+    public void AddBroker_same_type_on_producer_and_consumer_registers()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBroker(b =>
+        {
+            b.UseRabbitMq(RabbitSettings());
+            b.AddProducerFor<TestMessage>();
+            b.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
+        });
+
+        services.Any(d => d.ServiceType == typeof(IProducer<TestMessage>)).ShouldBeTrue();
+        services.Any(d => d.IsKeyedService && d.ServiceType == typeof(HandlerWrapper)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void AddBroker_kafka_short_name_collision_throws_before_consumer_registration()
+    {
+        var services = new ServiceCollection();
+
+        ArgumentException ex = Should.Throw<ArgumentException>(() => services.AddBroker(b =>
+        {
+            b.UseKafka(KafkaSettings());
+            b.AddProducerFor<LeftWire.WireNameMessage>();
+            b.AddConsumerFor<RightWire.WireNameMessage>((RightWire.WireNameMessage _) => Task.FromResult(HandleResult.Ack));
+        }));
+
+        ex.Message.ShouldContain(typeof(LeftWire.WireNameMessage).FullName!);
+        ex.Message.ShouldContain(typeof(RightWire.WireNameMessage).FullName!);
+        ex.Message.ShouldContain(nameof(LeftWire.WireNameMessage));
+        services.Any(d => d.ServiceType == typeof(HandlerWrapper)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AddBroker_rabbit_short_name_collision_throws_before_consumer_registration()
+    {
+        var services = new ServiceCollection();
+
+        ArgumentException ex = Should.Throw<ArgumentException>(() => services.AddBroker("orders", b =>
+        {
+            b.UseRabbitMq(RabbitSettings());
+            b.AddProducerFor<LeftWire.WireNameMessage>();
+            b.AddConsumerFor<RightWire.WireNameMessage>((RightWire.WireNameMessage _) => Task.FromResult(HandleResult.Ack));
+        }));
+
+        ex.Message.ShouldContain(typeof(LeftWire.WireNameMessage).FullName!);
+        ex.Message.ShouldContain(typeof(RightWire.WireNameMessage).FullName!);
+        ex.Message.ShouldContain(nameof(LeftWire.WireNameMessage));
+        services.Any(d => d.ServiceType == typeof(HandlerWrapper)).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void AddBroker_kafka_dead_letter_topic_colliding_with_message_throws()
+    {
+        var services = new ServiceCollection();
+
+        ArgumentException ex = Should.Throw<ArgumentException>(() => services.AddBroker(b =>
+        {
+            b.UseKafka(new KafkaSettings { Hosts = "localhost:9092", DeadLetterTopic = nameof(TestMessage) });
+            b.AddProducerFor<TestMessage>();
+        }));
+
+        ex.Message.ShouldContain(nameof(TestMessage));
+        ex.Message.ShouldContain(typeof(TestMessage).FullName!);
+        ex.Message.ShouldContain("DeadLetterTopic");
+    }
+
+    [Fact]
+    public void AddBroker_kafka_rpc_reply_topic_colliding_with_message_throws()
+    {
+        var services = new ServiceCollection();
+
+        ArgumentException ex = Should.Throw<ArgumentException>(() => services.AddBroker(b =>
+        {
+            b.UseKafka(new KafkaSettings { Hosts = "localhost:9092", RpcReplyTopic = nameof(TestMessage) });
+            b.AddProducerFor<TestMessage>();
+        }));
+
+        ex.Message.ShouldContain(nameof(TestMessage));
+        ex.Message.ShouldContain(typeof(TestMessage).FullName!);
+        ex.Message.ShouldContain("RpcReplyTopic");
+    }
+
+    [Fact]
+    public void AddBroker_same_rpc_input_and_output_registers_one_keyed_producer()
+    {
+        var services = new ServiceCollection();
+
+        services.AddBroker("orders", b =>
+        {
+            b.UseRabbitMq(RabbitSettings());
+            b.AddRpcCaller<TestMessage, TestMessage>();
+            b.AddRpcReceiver<TestMessage, TestMessage>((TestMessage _) => Task.FromResult(new TestMessage()));
+        });
+        services.AddBroker("payments", b =>
+        {
+            b.UseKafka(KafkaSettings());
+            b.AddRpcCaller<AnotherTestMessage, AnotherTestMessage>();
+            b.AddRpcReceiver<AnotherTestMessage, AnotherTestMessage>((AnotherTestMessage _) => Task.FromResult(new AnotherTestMessage()));
+        });
+
+        services.Count(d => d.IsKeyedService && Equals(d.ServiceKey, "orders") && d.ServiceType == typeof(IProducer<TestMessage>))
+            .ShouldBe(1);
+        services.Count(d => d.IsKeyedService && Equals(d.ServiceKey, "payments") && d.ServiceType == typeof(IProducer<AnotherTestMessage>))
+            .ShouldBe(1);
     }
 }

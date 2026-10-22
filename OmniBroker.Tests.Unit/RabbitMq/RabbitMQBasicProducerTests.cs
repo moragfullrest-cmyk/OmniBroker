@@ -43,6 +43,20 @@ public sealed class RabbitMQBasicProducerTests
         return (sut, channel, pool);
     }
 
+    private static void CaptureProperties(Mock<IChannel> channel, Action<BasicProperties> capture)
+    {
+        channel.Setup(c => c.BasicPublishAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<BasicProperties>(),
+                It.IsAny<ReadOnlyMemory<byte>>(),
+                It.IsAny<CancellationToken>()))
+            .Callback<string, string, bool, BasicProperties, ReadOnlyMemory<byte>, CancellationToken>(
+                (_, _, _, props, _, _) => capture(props))
+            .Returns(ValueTask.CompletedTask);
+    }
+
     [Fact]
     public async Task Publish_null_message_throws()
     {
@@ -111,6 +125,54 @@ public sealed class RabbitMQBasicProducerTests
     }
 
     [Fact]
+    public async Task Publish_message_correlation_is_sent_when_options_omit_it()
+    {
+        BasicProperties? captured = null;
+        (RabbitMQBasicProducer<TestMessage> sut, _, ConcurrentObjectPool<IChannel> pool) = CreateSut(channel =>
+            CaptureProperties(channel, props => captured = props));
+        await using (pool)
+        {
+            await sut.Publish(new TestMessage { Body = [1], CorrelationId = "from-message" });
+
+            captured.ShouldNotBeNull();
+            captured!.CorrelationId.ShouldBe("from-message");
+        }
+    }
+
+    [Fact]
+    public async Task Publish_options_correlation_overrides_message()
+    {
+        BasicProperties? captured = null;
+        (RabbitMQBasicProducer<TestMessage> sut, _, ConcurrentObjectPool<IChannel> pool) = CreateSut(channel =>
+            CaptureProperties(channel, props => captured = props));
+        await using (pool)
+        {
+            await sut.Publish(
+                new TestMessage { Body = [1], CorrelationId = "from-message" },
+                new PublishOptions("from-options", null, null));
+
+            captured.ShouldNotBeNull();
+            captured!.CorrelationId.ShouldBe("from-options");
+        }
+    }
+
+    [Fact]
+    public async Task Publish_without_correlation_sends_new_id()
+    {
+        BasicProperties? captured = null;
+        (RabbitMQBasicProducer<TestMessage> sut, _, ConcurrentObjectPool<IChannel> pool) = CreateSut(channel =>
+            CaptureProperties(channel, props => captured = props));
+        await using (pool)
+        {
+            await sut.Publish(new TestMessage { Body = [1], CorrelationId = "" });
+
+            captured.ShouldNotBeNull();
+            Guid.TryParse(captured!.CorrelationId, out Guid id).ShouldBeTrue();
+            id.ShouldNotBe(Guid.Empty);
+        }
+    }
+
+    [Fact]
     public async Task Publish_PublishException_returns_false()
     {
         (RabbitMQBasicProducer<TestMessage> sut, _, ConcurrentObjectPool<IChannel> pool) = CreateSut(channel =>
@@ -129,6 +191,28 @@ public sealed class RabbitMQBasicProducerTests
             bool result = await sut.Publish(new TestMessage { Body = [1] });
 
             result.ShouldBeFalse();
+        }
+    }
+
+    [Fact]
+    public async Task Publish_unroutable_PublishException_throws()
+    {
+        (RabbitMQBasicProducer<TestMessage> sut, _, ConcurrentObjectPool<IChannel> pool) = CreateSut(channel =>
+        {
+            channel.Setup(c => c.BasicPublishAsync(
+                    It.IsAny<string>(),
+                    It.IsAny<string>(),
+                    It.IsAny<bool>(),
+                    It.IsAny<BasicProperties>(),
+                    It.IsAny<ReadOnlyMemory<byte>>(),
+                    It.IsAny<CancellationToken>()))
+                .Throws(new PublishException(1UL, true));
+        });
+        await using (pool)
+        {
+            PublishException ex = await Should.ThrowAsync<PublishException>(() => sut.Publish(new TestMessage { Body = [1] }));
+
+            ex.IsReturn.ShouldBeTrue();
         }
     }
 

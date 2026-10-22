@@ -25,10 +25,15 @@ internal sealed class RabbitMQBasicProducer<TMessage>(
                 return false;
 
             string exchange = options?.Destination ?? nameResolver.ResolveOutboundName(typeof(TMessage));
+            string? correlationId = options?.CorrelationId;
+            if (string.IsNullOrEmpty(correlationId))
+                correlationId = message.CorrelationId;
+            if (string.IsNullOrEmpty(correlationId))
+                correlationId = Guid.NewGuid().ToString();
 
             var props = new BasicProperties
             {
-                CorrelationId = options?.CorrelationId ?? Guid.NewGuid().ToString(),
+                CorrelationId = correlationId,
                 ReplyTo = options?.ReplyTo
             };
 
@@ -45,6 +50,8 @@ internal sealed class RabbitMQBasicProducer<TMessage>(
         catch (PublishException publishException)
         {
             logger.LogError(publishException, "Message publish failed");
+            if (publishException.IsReturn)
+                throw;
 
             return false;
         }

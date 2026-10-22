@@ -462,6 +462,49 @@ public sealed class KafkaConsumerTests
     }
 
     [Fact]
+    public async Task Failed_seek_retries_without_consuming_the_next_record()
+    {
+        using var cts = new CancellationTokenSource();
+        int consumes = 0;
+        int seeks = 0;
+        var producer = new Mock<IProducer<string, byte[]>>();
+        producer.Setup(p => p.ProduceAsync(It.IsAny<string>(), It.IsAny<Message<string, byte[]>>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("produce failed"));
+
+        (KafkaConsumer consumer, Mock<IConsumer<string, byte[]>> kafka, List<ConsumeResult<string, byte[]>> committed) = Create(
+            new HandlerWrapper(typeof(TestMessage),
+            [
+                (_, _, _) => Task.FromResult(HandleResult.Retry)
+            ], HandlerWrapper.BuildCreateMessage(typeof(TestMessage))),
+            c =>
+            {
+                c.Setup(x => x.Consume(It.IsAny<CancellationToken>()))
+                    .Returns(() =>
+                    {
+                        int call = Interlocked.Increment(ref consumes);
+                        return Result(nameof(TestMessage), [(byte)call]);
+                    });
+                c.Setup(x => x.Seek(It.IsAny<TopicPartitionOffset>()))
+                    .Callback(() =>
+                    {
+                        if (Interlocked.Increment(ref seeks) >= 2)
+                            cts.Cancel();
+                    })
+                    .Throws(new InvalidOperationException("seek failed"));
+            },
+            producer,
+            Settings("dlq-topic"));
+        consumer.DeadLetterRetryDelay = TimeSpan.Zero;
+
+        await RunExecuteAsync(consumer, cts.Token);
+
+        committed.ShouldBeEmpty();
+        consumes.ShouldBe(1);
+        kafka.Verify(c => c.Consume(It.IsAny<CancellationToken>()), Times.Once);
+        kafka.Verify(c => c.Seek(It.IsAny<TopicPartitionOffset>()), Times.AtLeast(2));
+    }
+
+    [Fact]
     public async Task Handler_exception_with_dead_letter_topic_produce_throws_does_not_commit()
     {
         using var cts = new CancellationTokenSource();

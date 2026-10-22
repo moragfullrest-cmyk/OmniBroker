@@ -37,6 +37,26 @@ public sealed class KafkaRemoteStateTests
     }
 
     [Fact]
+    public async Task ValidateRemoteBrokerState_passes_canceled_start_token_to_metadata()
+    {
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        var metadata = new Mock<IKafkaMetadataClient>();
+        metadata.Setup(m => m.ProbeConnectionAsync(It.IsAny<TimeSpan>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException(canceled.Token));
+        (KafkaExtension extension, BrokerOptionsBuilder builder, ServiceProvider provider) = Create(new KafkaSettings
+        {
+            Hosts = "localhost:9092"
+        });
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => extension.ValidateRemoteBrokerState(provider, builder, metadata.Object, canceled.Token));
+
+        metadata.Verify(m => m.ProbeConnectionAsync(It.IsAny<TimeSpan>(), canceled.Token), Times.Once);
+        metadata.Verify(m => m.ProbeConnectionAsync(It.IsAny<TimeSpan>(), CancellationToken.None), Times.Never);
+    }
+
+    [Fact]
     public async Task ValidateRemoteBrokerState_lists_every_missing_topic()
     {
         var metadata = ReadyMetadata(_ => Unknown("ignored"));

@@ -23,11 +23,19 @@ internal static class KafkaRpcCorrelation
         if (!pending.TryRemove(correlationId, out KafkaRpcWait? wait))
             return false;
 
-        IMessage message = wait.Create();
-        message.Body = body;
-        message.CorrelationId = correlationId;
-        wait.Completion.TrySetResult(message);
-        return true;
+        try
+        {
+            IMessage message = wait.Create();
+            message.Body = body;
+            message.CorrelationId = correlationId;
+            wait.Completion.TrySetResult(message);
+            return true;
+        }
+        catch
+        {
+            pending.TryAdd(correlationId, wait);
+            throw;
+        }
     }
 
     internal static void CancelPending(ConcurrentDictionary<string, KafkaRpcWait> pending)

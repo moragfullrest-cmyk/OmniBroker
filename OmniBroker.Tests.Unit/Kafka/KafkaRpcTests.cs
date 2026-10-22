@@ -215,6 +215,52 @@ public sealed class KafkaRpcTests
     }
 
     [Fact]
+    public void TryComplete_create_failure_restores_the_wait_for_redelivery()
+    {
+        int creates = 0;
+        var wait = new KafkaRpcWait(
+            new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously),
+            () =>
+            {
+                if (Interlocked.Increment(ref creates) == 1)
+                    throw new InvalidOperationException("boom");
+                return new TestReplyMessage();
+            });
+        var pending = new ConcurrentDictionary<string, KafkaRpcWait> { ["corr"] = wait };
+
+        Should.Throw<InvalidOperationException>(() => KafkaRpcCorrelation.TryComplete(pending, "corr", [9]));
+
+        pending.ContainsKey("corr").ShouldBeTrue();
+        pending["corr"].ShouldBeSameAs(wait);
+        wait.Completion.Task.IsCompleted.ShouldBeFalse();
+
+        bool completed = KafkaRpcCorrelation.TryComplete(pending, "corr", [9]);
+
+        completed.ShouldBeTrue();
+        pending.IsEmpty.ShouldBeTrue();
+        wait.Completion.Task.IsCompletedSuccessfully.ShouldBeTrue();
+        wait.Completion.Task.Result.ShouldBeOfType<TestReplyMessage>().Body.ShouldBe([9]);
+    }
+
+    [Fact]
+    public void TryComplete_after_caller_removes_restored_wait_does_not_resurrect_it()
+    {
+        var wait = new KafkaRpcWait(
+            new TaskCompletionSource<IMessage>(TaskCreationOptions.RunContinuationsAsynchronously),
+            () => throw new InvalidOperationException("boom"));
+        var pending = new ConcurrentDictionary<string, KafkaRpcWait> { ["corr"] = wait };
+
+        Should.Throw<InvalidOperationException>(() => KafkaRpcCorrelation.TryComplete(pending, "corr", [9]));
+        pending.TryRemove("corr", out _).ShouldBeTrue();
+
+        bool completed = KafkaRpcCorrelation.TryComplete(pending, "corr", [1]);
+
+        completed.ShouldBeFalse();
+        pending.IsEmpty.ShouldBeTrue();
+        wait.Completion.Task.IsCompleted.ShouldBeFalse();
+    }
+
+    [Fact]
     public void CancelPending_cancels_waiting_tasks()
     {
         var pending = new ConcurrentDictionary<string, KafkaRpcWait>();

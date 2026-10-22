@@ -42,15 +42,15 @@ public interface IBrokerExtension
     /// Read remote broker state that this process cannot create itself.
     /// Throws <see cref="BrokerStateException"/> when that state is not ready.
     /// </summary>
-    Task ValidateRemoteBrokerState(IServiceProvider serviceProvider, BrokerOptionsBuilder builder);
+    Task ValidateRemoteBrokerState(IServiceProvider serviceProvider, BrokerOptionsBuilder builder, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Start message consumption
     /// </summary>
-    Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder);
+    Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Start broker infrastructure
     /// </summary>
-    Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder);
+    Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder, CancellationToken cancellationToken = default);
 }

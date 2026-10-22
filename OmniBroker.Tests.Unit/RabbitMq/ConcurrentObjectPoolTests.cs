@@ -1,3 +1,4 @@
+using System.Reflection;
 using OmniBroker.RabbitMQ.ServiceSetup;
 using Shouldly;
 
@@ -80,6 +81,27 @@ public sealed class ConcurrentObjectPoolTests
     }
 
     [Fact]
+    public async Task Get_create_during_dispose_discards_the_new_item()
+    {
+        ConcurrentObjectPool<PoolItem>? pool = null;
+        PoolItem? created = null;
+        pool = new ConcurrentObjectPool<PoolItem>(
+            async _ =>
+            {
+                created = new PoolItem();
+                await pool!.DisposeAsync();
+                return created;
+            },
+            maxSize: 1);
+
+        await Should.ThrowAsync<ObjectDisposedException>(() => pool.GetAsync());
+
+        created.ShouldNotBeNull();
+        created.Disposed.ShouldBeTrue();
+        await Should.ThrowAsync<ObjectDisposedException>(() => pool.GetAsync());
+    }
+
+    [Fact]
     public async Task Return_after_dispose_disposes_item()
     {
         var pool = new ConcurrentObjectPool<PoolItem>(_ => Task.FromResult(new PoolItem()), maxSize: 1);
@@ -92,7 +114,43 @@ public sealed class ConcurrentObjectPoolTests
     }
 
     [Fact]
-    public async Task Generator_failure_decrements_created_and_allows_retry()
+    public async Task Repeated_Get_Return_keeps_one_free_slot_and_the_next_Get_waits()
+    {
+        int created = 0;
+        await using var pool = new ConcurrentObjectPool<PoolItem>(
+            _ =>
+            {
+                Interlocked.Increment(ref created);
+                return Task.FromResult(new PoolItem());
+            },
+            maxSize: 1);
+
+        PoolItem item = await pool.GetAsync();
+        for (int i = 0; i < 64; i++)
+        {
+            pool.Return(item);
+            item = await pool.GetAsync();
+        }
+
+        created.ShouldBe(1);
+        AvailableSlots(pool).ShouldBe(0);
+
+        Task<PoolItem> waiting = pool.GetAsync();
+        await Task.Delay(50);
+        waiting.IsCompleted.ShouldBeFalse();
+
+        pool.Return(item);
+        PoolItem released = await waiting.WaitAsync(TimeSpan.FromSeconds(2));
+
+        released.ShouldBeSameAs(item);
+        AvailableSlots(pool).ShouldBe(0);
+
+        pool.Return(released);
+        AvailableSlots(pool).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Generator_failure_releases_slot_and_allows_retry()
     {
         int attempts = 0;
         await using var pool = new ConcurrentObjectPool<PoolItem>(
@@ -184,5 +242,13 @@ public sealed class ConcurrentObjectPoolTests
 
         next.ShouldNotBeNull();
         next.Disposed.ShouldBeFalse();
+    }
+
+    private static int AvailableSlots(ConcurrentObjectPool<PoolItem> pool)
+    {
+        var slots = (SemaphoreSlim)typeof(ConcurrentObjectPool<PoolItem>)
+            .GetField("_slots", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(pool)!;
+        return slots.CurrentCount;
     }
 }

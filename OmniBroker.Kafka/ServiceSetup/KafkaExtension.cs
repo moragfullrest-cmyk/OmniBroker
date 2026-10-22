@@ -38,6 +38,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) 
     public Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
     {
         ArgumentNullException.ThrowIfNull(builder.NameResolver);
+        BrokerWireNames.EnsureDistinct(builder, ReservedTopics());
         services.AddKeyedSingleton<INameResolver>(builder.BrokerName, builder.NameResolver);
         services.AddSingleton<IHostedService>(s => new KafkaBrokerHostedService(s, BrokerName));
         if (builder.RpcCallers.Count > 0)
@@ -204,7 +205,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) 
     private void RegisterTypedProducer(IServiceCollection services, Type messageType)
     {
         services.TryAddMultiBrokerProducer(messageType);
-        services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(messageType), BrokerName, (provider, key) =>
+        services.AddKeyedMessageProducer(messageType, BrokerName, (provider, key) =>
         {
             Type producerType = typeof(KafkaProducer<>).MakeGenericType(messageType);
             return Activator.CreateInstance(producerType,
@@ -214,16 +215,28 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) 
         });
     }
 
-    public async Task ValidateRemoteBrokerState(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
+    private IEnumerable<BrokerWireNames.ReservedName> ReservedTopics()
+    {
+        if (!string.IsNullOrWhiteSpace(settings.DeadLetterTopic))
+            yield return new BrokerWireNames.ReservedName("DeadLetterTopic", settings.DeadLetterTopic);
+        if (!string.IsNullOrWhiteSpace(settings.RpcReplyTopic))
+            yield return new BrokerWireNames.ReservedName("RpcReplyTopic", settings.RpcReplyTopic);
+    }
+
+    public async Task ValidateRemoteBrokerState(
+        IServiceProvider serviceProvider,
+        BrokerOptionsBuilder builder,
+        CancellationToken cancellationToken = default)
     {
         using var metadata = new KafkaAdminMetadataClient(settings);
-        await ValidateRemoteBrokerState(serviceProvider, builder, metadata);
+        await ValidateRemoteBrokerState(serviceProvider, builder, metadata, cancellationToken);
     }
 
     internal async Task ValidateRemoteBrokerState(
         IServiceProvider serviceProvider,
         BrokerOptionsBuilder builder,
-        IKafkaMetadataClient metadata)
+        IKafkaMetadataClient metadata,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(metadata);
@@ -236,7 +249,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) 
 
         try
         {
-            await metadata.ProbeConnectionAsync(KafkaAdminMetadataClient.Timeout, CancellationToken.None);
+            await metadata.ProbeConnectionAsync(KafkaAdminMetadataClient.Timeout, cancellationToken);
         }
         catch (BrokerStateException)
         {
@@ -255,17 +268,27 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) 
         }
 
         INameResolver nameResolver = serviceProvider.GetRequiredKeyedService<INameResolver>(BrokerName);
-        Dictionary<string, KafkaTopicSnapshot> snapshots = await ReadTopicsAsync(nameResolver, builder, metadata);
-        await EnsureReplyPartitionAsync(builder, metadata, snapshots);
+        Dictionary<string, KafkaTopicSnapshot> snapshots = await ReadTopicsAsync(nameResolver, builder, metadata, cancellationToken);
+        await EnsureReplyPartitionAsync(builder, metadata, snapshots, cancellationToken);
     }
 
-    public Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder) => Task.CompletedTask;
-    public Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder) => Task.CompletedTask;
+    public Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
+
+    public Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
+    }
 
     private async Task<Dictionary<string, KafkaTopicSnapshot>> ReadTopicsAsync(
         INameResolver nameResolver,
         BrokerOptionsBuilder builder,
-        IKafkaMetadataClient metadata)
+        IKafkaMetadataClient metadata,
+        CancellationToken cancellationToken)
     {
         var names = new HashSet<string>(StringComparer.Ordinal);
         foreach (Type type in builder.Producables)
@@ -284,7 +307,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) 
 
         foreach (string name in names.OrderBy(name => name, StringComparer.Ordinal))
         {
-            KafkaTopicSnapshot snapshot = await metadata.ReadTopicAsync(name, KafkaAdminMetadataClient.Timeout, CancellationToken.None);
+            KafkaTopicSnapshot snapshot = await metadata.ReadTopicAsync(name, KafkaAdminMetadataClient.Timeout, cancellationToken);
             snapshots[name] = snapshot;
             if (snapshot.Unknown)
                 missing.Add(name);
@@ -303,7 +326,8 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) 
     private async Task EnsureReplyPartitionAsync(
         BrokerOptionsBuilder builder,
         IKafkaMetadataClient metadata,
-        Dictionary<string, KafkaTopicSnapshot> snapshots)
+        Dictionary<string, KafkaTopicSnapshot> snapshots,
+        CancellationToken cancellationToken)
     {
         if (builder.RpcCallers.Count == 0)
             return;
@@ -318,7 +342,7 @@ internal sealed class KafkaExtension(KafkaSettings settings, string brokerName) 
             KafkaGroupSnapshot group = await metadata.ReadGroupAsync(
                 groupId,
                 KafkaAdminMetadataClient.Timeout,
-                CancellationToken.None);
+                cancellationToken);
             if (group.Failure is not null)
             {
                 throw new BrokerStateException(

@@ -1,9 +1,15 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using OmniBroker.Infrastructure;
+using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ;
+using OmniBroker.RabbitMQ.Implementations;
 using OmniBroker.RabbitMQ.ServiceSetup;
+using OmniBroker.Tests.Unit.Fixtures;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using Shouldly;
 
 namespace OmniBroker.Tests.Unit.RabbitMq;
@@ -252,6 +258,204 @@ public sealed class RabbitMqRuntimeTests
         runtime.ReconnectLock.CurrentCount.ShouldBe(1);
     }
 
+    [Fact]
+    public async Task Recover_open_connection_without_consumers_does_not_reset()
+    {
+        BrokerOptionsBuilder builder = RabbitBuilder();
+        var extension = (RabbitMQExtension)builder.Extension!;
+        Mock<IConnection> connection = OpenConnection();
+        var runtime = new RabbitMqRuntime { Connection = connection.Object };
+        ServiceProvider provider = ProviderWithRuntime(builder, runtime);
+
+        await extension.RecoverAsync(provider, builder);
+
+        runtime.Connection.ShouldBeSameAs(connection.Object);
+        runtime.ConsumerChannel.ShouldBeNull();
+        VerifyConnectionWasNotClosed(connection);
+    }
+
+    [Fact]
+    public async Task Recover_second_signal_does_not_reset_open_publisher_connection()
+    {
+        BrokerOptionsBuilder builder = RabbitBuilder();
+        var extension = (RabbitMQExtension)builder.Extension!;
+        Mock<IConnection> connection = OpenConnection();
+        var runtime = new RabbitMqRuntime { Connection = connection.Object };
+        ServiceProvider provider = ProviderWithRuntime(builder, runtime);
+
+        await runtime.ReconnectLock.WaitAsync();
+        Task recover = extension.RecoverAsync(provider, builder);
+        await Task.Delay(50);
+        recover.IsCompleted.ShouldBeFalse();
+        runtime.ReconnectLock.Release();
+
+        await recover.WaitAsync(TimeSpan.FromSeconds(2));
+        runtime.Connection.ShouldBeSameAs(connection.Object);
+        runtime.ReconnectLock.CurrentCount.ShouldBe(1);
+        VerifyConnectionWasNotClosed(connection);
+    }
+
+    [Fact]
+    public async Task RetryStart_consume_failure_retries_and_drops_failed_channel()
+    {
+        var settings = new RabbitMQSettings
+        {
+            HostName = "localhost",
+            UserName = "guest",
+            Password = "guest"
+        };
+        var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
+        builder.UseRabbitMq(settings);
+        builder.AddConsumerFor<TestMessage>((TestMessage _) => Task.FromResult(HandleResult.Ack));
+        var extension = (RabbitMQExtension)builder.Extension!;
+
+        var consumed = new List<Mock<IChannel>>();
+        int attempts = 0;
+        var connection = new Mock<IConnection>();
+        connection.SetupGet(c => c.IsOpen).Returns(true);
+        connection.Setup(c => c.CreateChannelAsync(It.IsAny<CreateChannelOptions>(), It.IsAny<CancellationToken>()))
+            .Returns((CreateChannelOptions _, CancellationToken _) =>
+            {
+                var channel = new Mock<IChannel>();
+                SetupBrokerChannel(channel, () =>
+                {
+                    consumed.Add(channel);
+                    int n = Interlocked.Increment(ref attempts);
+                    if (n == 1)
+                        throw new InvalidOperationException("consume failed");
+
+                    return Task.FromResult("tag");
+                });
+                return Task.FromResult(channel.Object);
+            });
+
+        var runtime = new RabbitMqRuntime { Connection = connection.Object };
+        var services = new ServiceCollection();
+        await extension.SetupConsumers(services, builder);
+        services.AddSingleton<ILogger<RabbitMQExtension>>(new StopAfterSecondError(runtime));
+        services.AddSingleton<ILogger<RabbitMQBasicConsumer>>(NullLogger<RabbitMQBasicConsumer>.Instance);
+        services.AddKeyedSingleton<INameResolver>(builder.BrokerName, new RabbitMQNameResolver(builder.BrokerName));
+        services.AddKeyedSingleton(builder.BrokerName, settings);
+        services.AddKeyedSingleton(builder.BrokerName, runtime);
+        ServiceProvider provider = services.BuildServiceProvider();
+
+        try
+        {
+            await extension.RetryStartAsync(provider, builder, runtime.StoppingToken)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            attempts.ShouldBe(2);
+            runtime.ConsumerChannel.ShouldBeSameAs(consumed[1].Object);
+            consumed[0].Verify(c => c.CloseAsync(
+                It.IsAny<ushort>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()), Times.Once);
+            consumed[0].Verify(c => c.DisposeAsync(), Times.Once);
+            consumed[1].Verify(c => c.CloseAsync(
+                It.IsAny<ushort>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()), Times.Never);
+        }
+        catch (TimeoutException)
+        {
+            runtime.SignalStop();
+            throw;
+        }
+        finally
+        {
+            if (runtime.ChannelPool is not null)
+                await runtime.ChannelPool.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Connection_shutdown_handler_enters_recover()
+    {
+        BrokerOptionsBuilder builder = RabbitBuilder();
+        var extension = (RabbitMQExtension)builder.Extension!;
+        Mock<IConnection> connection = OpenConnection();
+        var runtime = new RabbitMqRuntime { Connection = connection.Object };
+        ServiceProvider provider = ProviderWithRuntime(builder, runtime);
+        extension.AttachConnectionShutdown(connection.Object, runtime, provider, builder);
+        AsyncEventHandler<ShutdownEventArgs> handler = runtime.ConnectionShutdown!;
+
+        await runtime.ReconnectLock.WaitAsync();
+        Task shutdown = handler(connection.Object, new ShutdownEventArgs(ShutdownInitiator.Peer, 320, "connection down"));
+        await Task.Delay(50);
+        shutdown.IsCompleted.ShouldBeFalse();
+        runtime.ReconnectLock.Release();
+
+        await shutdown.WaitAsync(TimeSpan.FromSeconds(2));
+        runtime.Connection.ShouldBeSameAs(connection.Object);
+        VerifyConnectionWasNotClosed(connection);
+    }
+
+    [Fact]
+    public async Task Connection_shutdown_handler_skips_recover_when_suppressed_or_stopping()
+    {
+        BrokerOptionsBuilder builder = RabbitBuilder();
+        var extension = (RabbitMQExtension)builder.Extension!;
+        Mock<IConnection> connection = OpenConnection();
+        var runtime = new RabbitMqRuntime { Connection = connection.Object };
+        ServiceProvider provider = ProviderWithRuntime(builder, runtime);
+        extension.AttachConnectionShutdown(connection.Object, runtime, provider, builder);
+        AsyncEventHandler<ShutdownEventArgs> handler = runtime.ConnectionShutdown!;
+        var reason = new ShutdownEventArgs(ShutdownInitiator.Application, 200, "stop");
+
+        runtime.SuppressConsumerShutdownRecover = true;
+        await runtime.ReconnectLock.WaitAsync();
+        await handler(connection.Object, reason).WaitAsync(TimeSpan.FromSeconds(2));
+
+        runtime.SuppressConsumerShutdownRecover = false;
+        runtime.SignalStop();
+        await handler(connection.Object, reason).WaitAsync(TimeSpan.FromSeconds(2));
+        runtime.ReconnectLock.Release();
+
+        runtime.Connection.ShouldBeSameAs(connection.Object);
+        VerifyConnectionWasNotClosed(connection);
+    }
+
+    [Fact]
+    public async Task Reset_unsubscribes_connection_shutdown_before_close()
+    {
+        BrokerOptionsBuilder builder = RabbitBuilder();
+        var extension = (RabbitMQExtension)builder.Extension!;
+        AsyncEventHandler<ShutdownEventArgs>? subscribed = null;
+        int raisedOnClose = 0;
+        var connection = new Mock<IConnection>();
+        connection.SetupGet(c => c.IsOpen).Returns(true);
+        connection.SetupAdd(c => c.ConnectionShutdownAsync += It.IsAny<AsyncEventHandler<ShutdownEventArgs>>())
+            .Callback<AsyncEventHandler<ShutdownEventArgs>>(handler => subscribed += handler);
+        connection.SetupRemove(c => c.ConnectionShutdownAsync -= It.IsAny<AsyncEventHandler<ShutdownEventArgs>>())
+            .Callback<AsyncEventHandler<ShutdownEventArgs>>(handler => subscribed -= handler);
+        connection.Setup(c => c.CloseAsync(
+                It.IsAny<ushort>(),
+                It.IsAny<string>(),
+                It.IsAny<TimeSpan>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(() =>
+            {
+                if (subscribed is not null)
+                    raisedOnClose++;
+                return Task.CompletedTask;
+            });
+
+        var runtime = new RabbitMqRuntime { Connection = connection.Object };
+        ServiceProvider provider = ProviderWithRuntime(builder, runtime);
+        extension.AttachConnectionShutdown(connection.Object, runtime, provider, builder);
+        subscribed.ShouldNotBeNull();
+
+        await runtime.ResetConnectionCoreAsync();
+
+        raisedOnClose.ShouldBe(0);
+        runtime.Connection.ShouldBeNull();
+        runtime.ConnectionShutdown.ShouldBeNull();
+        runtime.SuppressConsumerShutdownRecover.ShouldBeTrue();
+    }
+
     private static BrokerOptionsBuilder RabbitBuilder()
     {
         var builder = new BrokerOptionsBuilder { BrokerName = "svc" };
@@ -264,11 +468,105 @@ public sealed class RabbitMqRuntimeTests
         return builder;
     }
 
+    private static Mock<IConnection> OpenConnection()
+    {
+        var connection = new Mock<IConnection>();
+        connection.SetupGet(c => c.IsOpen).Returns(true);
+        connection.Setup(c => c.CloseAsync(
+                It.IsAny<ushort>(),
+                It.IsAny<string>(),
+                It.IsAny<TimeSpan>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        return connection;
+    }
+
+    private static void VerifyConnectionWasNotClosed(Mock<IConnection> connection)
+    {
+        connection.Verify(c => c.CloseAsync(
+            It.IsAny<ushort>(),
+            It.IsAny<string>(),
+            It.IsAny<TimeSpan>(),
+            It.IsAny<bool>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    private static void SetupBrokerChannel(Mock<IChannel> channel, Func<Task<string>> consume)
+    {
+        SetupChannelLifecycle(channel);
+        channel.SetupGet(c => c.IsOpen).Returns(true);
+        channel.Setup(c => c.BasicQosAsync(
+                It.IsAny<uint>(),
+                It.IsAny<ushort>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        channel.Setup(c => c.ExchangeDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        channel.Setup(c => c.QueueDeclareAsync(
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new QueueDeclareOk("reply-q", 0, 0));
+        channel.Setup(c => c.QueueBindAsync(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<bool>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        channel.Setup(c => c.BasicConsumeAsync(
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<string>(),
+                It.IsAny<bool>(),
+                It.IsAny<bool>(),
+                It.IsAny<IDictionary<string, object?>>(),
+                It.IsAny<IAsyncBasicConsumer>(),
+                It.IsAny<CancellationToken>()))
+            .Returns(() => consume());
+    }
+
     private static ServiceProvider ProviderWithRuntime(BrokerOptionsBuilder builder, RabbitMqRuntime runtime)
     {
         var services = new ServiceCollection();
         services.AddKeyedSingleton(builder.BrokerName, runtime);
         return services.BuildServiceProvider();
+    }
+
+    private sealed class StopAfterSecondError(RabbitMqRuntime runtime) : ILogger<RabbitMQExtension>
+    {
+        private int _errors;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Error && Interlocked.Increment(ref _errors) >= 2)
+                runtime.SignalStop();
+        }
     }
 
     private sealed class RetrySignalLogger : ILogger<RabbitMQExtension>

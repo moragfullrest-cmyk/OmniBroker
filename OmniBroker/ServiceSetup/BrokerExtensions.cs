@@ -122,7 +122,7 @@ public static class BrokerExtensions
 
         if (optionsBuilder.RpcCallers.ContainsKey(inputType))
             throw new ArgumentException($"RPC caller for input type {inputType} is already registered");
-        if (optionsBuilder.RpcCallers.ContainsValue(outputType))
+        if (optionsBuilder.RpcCallers.ContainsValue(outputType) || ReceiverReturns(optionsBuilder, outputType))
             throw new ArgumentException($"Message of type {outputType} is already registered as RPC output");
         if (optionsBuilder.RpcCallers.ContainsKey(outputType))
             throw new ArgumentException($"Message of type {outputType} is already registered as RPC input");
@@ -181,6 +181,8 @@ public static class BrokerExtensions
 
         if (optionsBuilder.RpcReceivers.ContainsKey(outputType))
             throw new ArgumentException($"Message of type {outputType} is already registered as RPC receive input");
+        if (ReceiverReturns(optionsBuilder, outputType))
+            throw new ArgumentException($"Message of type {outputType} is already registered as RPC output");
 
         optionsBuilder.RpcReceivers.Add(inputType, action);
         return optionsBuilder;
@@ -198,6 +200,22 @@ public static class BrokerExtensions
             throw new ArgumentException($"Message of type {messageType} is already registered as producer");
         if (optionsBuilder.Consumables.ContainsKey(messageType))
             throw new ArgumentException($"Message of type {messageType} is already registered as consumer");
+    }
+
+    private static bool ReceiverReturns(BrokerOptionsBuilder optionsBuilder, Type outputType)
+    {
+        foreach (Delegate receiver in optionsBuilder.RpcReceivers.Values)
+        {
+            Type returnType = receiver.Method.ReturnType;
+            if (returnType.IsGenericType
+                && returnType.GenericTypeArguments.Length == 1
+                && returnType.GenericTypeArguments[0] == outputType)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void EnsureNotInRpc(BrokerOptionsBuilder optionsBuilder, Type messageType)

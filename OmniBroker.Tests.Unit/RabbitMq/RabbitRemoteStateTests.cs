@@ -64,6 +64,26 @@ public sealed class RabbitRemoteStateTests
     }
 
     [Fact]
+    public async Task ValidateRemoteBrokerState_canceled_start_token_does_not_open_a_channel()
+    {
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        var connection = new Mock<IConnection>();
+        connection.Setup(c => c.CreateChannelAsync(It.IsAny<CreateChannelOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Mock<IChannel>().Object);
+        (RabbitMQExtension extension, BrokerOptionsBuilder builder, ServiceProvider provider) = Create(connection.Object);
+        RabbitMqRuntime runtime = provider.GetRequiredKeyedService<RabbitMqRuntime>(builder.BrokerName);
+
+        await Should.ThrowAsync<OperationCanceledException>(
+            () => extension.ValidateRemoteBrokerState(provider, builder, canceled.Token));
+
+        connection.Verify(
+            c => c.CreateChannelAsync(It.IsAny<CreateChannelOptions>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+        runtime.StoppingToken.IsCancellationRequested.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task StartAsync_access_refused_wraps_before_consumers()
     {
         await AssertDeclareConflictStopsBeforeConsumers(

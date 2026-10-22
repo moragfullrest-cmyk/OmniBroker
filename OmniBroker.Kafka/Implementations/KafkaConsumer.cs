@@ -198,25 +198,40 @@ internal sealed class KafkaConsumer : BackgroundService
             "Dead-letter publish failed; leaving offset uncommitted. Topic={Topic}, Offset={Offset}",
             receivedMessage.Topic,
             receivedMessage.Offset);
-        try
-        {
-            _consumer.Seek(receivedMessage.TopicPartitionOffset);
-        }
-        catch (Exception seekEx)
-        {
-            _logger.LogError(
-                seekEx,
-                "Failed to seek Kafka consumer back to offset {Offset} on {Topic}",
-                receivedMessage.Offset,
-                receivedMessage.Topic);
-        }
 
+        while (cancellationToken.IsCancellationRequested == false)
+        {
+            try
+            {
+                _consumer.Seek(receivedMessage.TopicPartitionOffset);
+            }
+            catch (Exception seekEx)
+            {
+                _logger.LogError(
+                    seekEx,
+                    "Failed to seek Kafka consumer back to offset {Offset} on {Topic}",
+                    receivedMessage.Offset,
+                    receivedMessage.Topic);
+                if (!await DelayForRedeliveryAsync(cancellationToken))
+                    return;
+                continue;
+            }
+
+            await DelayForRedeliveryAsync(cancellationToken);
+            return;
+        }
+    }
+
+    private async Task<bool> DelayForRedeliveryAsync(CancellationToken cancellationToken)
+    {
         try
         {
             await Task.Delay(DeadLetterRetryDelay, cancellationToken);
+            return cancellationToken.IsCancellationRequested == false;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            return false;
         }
     }
 

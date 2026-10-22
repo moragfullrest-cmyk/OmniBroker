@@ -7,6 +7,7 @@ using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
 using OmniBroker.RabbitMQ.Implementations;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 using RabbitMQ.Client.Exceptions;
 
 namespace OmniBroker.RabbitMQ.ServiceSetup;
@@ -20,6 +21,8 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
     public Task SetupInfrastructure(IServiceCollection services, BrokerOptionsBuilder builder)
     {
+        ArgumentNullException.ThrowIfNull(builder.NameResolver);
+        BrokerWireNames.EnsureDistinct(builder);
         services.AddKeyedSingleton(BrokerName, settings);
         services.AddKeyedSingleton(BrokerName, new RabbitMqRuntime());
 
@@ -62,7 +65,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
             services.AddTransient(rpcCallerServiceType, CreateRpcCaller);
             services.AddKeyedTransient(rpcCallerServiceType, BrokerName, (s, _) => CreateRpcCaller(s));
-            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(t.Key), BrokerName, (s, obj) =>
+            services.AddKeyedMessageProducer(t.Key, BrokerName, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(t.Key);
                 return Activator.CreateInstance(producerType,
@@ -99,7 +102,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
                 ],
                 CreateMessage: HandlerWrapper.BuildCreateMessage(t.Key)
             ));
-            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(returnType), BrokerName, (s, obj) =>
+            services.AddKeyedMessageProducer(returnType, BrokerName, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(returnType);
                 return Activator.CreateInstance(producerType,
@@ -146,13 +149,26 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
                 throw new InvalidOperationException("RPC reply requires ReplyInfo.ReplyTo.");
             }
             result.Tag = replyInfo.ReplyTo;
-            bool published = await producer.Publish(result, new PublishOptions
-            (
-                CorrelationId: message.CorrelationId,
-                Destination: builder.NameResolver!.ResolveOutboundName(typeof(TOutput)),
-                ReplyTo: null
-            ), context.CancellationToken);
-            return published ? HandleResult.Ack : HandleResult.Retry;
+            try
+            {
+                bool published = await producer.Publish(result, new PublishOptions
+                (
+                    CorrelationId: message.CorrelationId,
+                    Destination: builder.NameResolver!.ResolveOutboundName(typeof(TOutput)),
+                    ReplyTo: null
+                ), context.CancellationToken);
+                return published ? HandleResult.Ack : HandleResult.Retry;
+            }
+            catch (PublishException ex) when (ex.IsReturn)
+            {
+                ILogger logger = provider.GetService<ILogger<RabbitMQExtension>>()
+                    ?? NullLogger<RabbitMQExtension>.Instance;
+                logger.LogWarning(
+                    ex,
+                    "RPC reply to {ReplyTo} was not routed and will be acknowledged",
+                    replyInfo.ReplyTo);
+                return HandleResult.Ack;
+            }
         };
     }
 
@@ -161,7 +177,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         foreach (Type type in builder.Producables)
         {
             services.TryAddMultiBrokerProducer(type);
-            services.AddKeyedSingleton(typeof(IProducer<>).MakeGenericType(type), BrokerName, (s, obj) =>
+            services.AddKeyedMessageProducer(type, BrokerName, (s, obj) =>
             {
                 Type producerType = typeof(RabbitMQBasicProducer<>).MakeGenericType(type);
                 return Activator.CreateInstance(producerType,
@@ -174,17 +190,22 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         return Task.CompletedTask;
     }
 
-    public async Task ValidateRemoteBrokerState(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
+    public async Task ValidateRemoteBrokerState(
+        IServiceProvider serviceProvider,
+        BrokerOptionsBuilder builder,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(builder);
         RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
-        runtime.StoppingToken.ThrowIfCancellationRequested();
+        using CancellationTokenSource linked = LinkWithStop(runtime, cancellationToken);
+        CancellationToken token = linked.Token;
+        token.ThrowIfCancellationRequested();
 
         try
         {
-            await EnsureConnectionAsync(runtime);
+            await EnsureConnectionAsync(runtime, serviceProvider, builder, token);
         }
-        catch (OperationCanceledException) when (runtime.StoppingToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             throw;
         }
@@ -195,13 +216,13 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
         try
         {
-            await ProbeChannelAsync(runtime);
+            await ProbeChannelAsync(runtime, token);
         }
         catch (BrokerStateException)
         {
             throw;
         }
-        catch (OperationCanceledException) when (runtime.StoppingToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             throw;
         }
@@ -211,12 +232,17 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         }
     }
 
-    public async Task StartInfrastructure(IServiceProvider serviceProvider, BrokerOptionsBuilder builder)
+    public async Task StartInfrastructure(
+        IServiceProvider serviceProvider,
+        BrokerOptionsBuilder builder,
+        CancellationToken cancellationToken = default)
     {
         RabbitMqRuntime runtime = serviceProvider.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
-        runtime.StoppingToken.ThrowIfCancellationRequested();
+        using CancellationTokenSource linked = LinkWithStop(runtime, cancellationToken);
+        CancellationToken token = linked.Token;
+        token.ThrowIfCancellationRequested();
 
-        await EnsureConnectionAsync(runtime);
+        await EnsureConnectionAsync(runtime, serviceProvider, builder, token);
 
         if (runtime.ChannelPool is null)
         {
@@ -242,7 +268,14 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         }
     }
 
-    private async Task EnsureConnectionAsync(RabbitMqRuntime runtime)
+    private static CancellationTokenSource LinkWithStop(RabbitMqRuntime runtime, CancellationToken cancellationToken)
+        => CancellationTokenSource.CreateLinkedTokenSource(runtime.StoppingToken, cancellationToken);
+
+    private async Task EnsureConnectionAsync(
+        RabbitMqRuntime runtime,
+        IServiceProvider serviceProvider,
+        BrokerOptionsBuilder builder,
+        CancellationToken cancellationToken)
     {
         if (runtime.Connection is not null)
             return;
@@ -265,15 +298,43 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
             };
         }
 
-        runtime.Connection = await factory.CreateConnectionAsync(runtime.StoppingToken);
+        IConnection connection = await factory.CreateConnectionAsync(cancellationToken);
+        runtime.Connection = connection;
+        AttachConnectionShutdown(connection, runtime, serviceProvider, builder);
     }
 
-    private async Task ProbeChannelAsync(RabbitMqRuntime runtime)
+    internal void AttachConnectionShutdown(
+        IConnection connection,
+        RabbitMqRuntime runtime,
+        IServiceProvider serviceProvider,
+        BrokerOptionsBuilder builder)
     {
-        IChannel channel = await runtime.RequireConnection().CreateChannelAsync(cancellationToken: runtime.StoppingToken);
+        AsyncEventHandler<ShutdownEventArgs> handler = (_, _) =>
+            OnConnectionShutdownAsync(serviceProvider, builder, runtime);
+        connection.ConnectionShutdownAsync += handler;
+        runtime.ConnectionShutdown = handler;
+    }
+
+    private Task OnConnectionShutdownAsync(
+        IServiceProvider serviceProvider,
+        BrokerOptionsBuilder builder,
+        RabbitMqRuntime runtime)
+    {
+        if (runtime.StoppingToken.IsCancellationRequested)
+            return Task.CompletedTask;
+
+        if (runtime.SuppressConsumerShutdownRecover)
+            return Task.CompletedTask;
+
+        return RecoverAsync(serviceProvider, builder);
+    }
+
+    private async Task ProbeChannelAsync(RabbitMqRuntime runtime, CancellationToken cancellationToken)
+    {
+        IChannel channel = await runtime.RequireConnection().CreateChannelAsync(cancellationToken: cancellationToken);
         try
         {
-            await channel.CloseAsync(Constants.ReplySuccess, "Remote broker state validated", false, runtime.StoppingToken);
+            await channel.CloseAsync(Constants.ReplySuccess, "Remote broker state validated", false, cancellationToken);
         }
         finally
         {
@@ -318,7 +379,9 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
             if (cancellationToken.IsCancellationRequested)
                 return;
 
-            if (runtime.Connection is { IsOpen: true } && runtime.ConsumerChannel is { IsOpen: true })
+            bool connectionOpen = runtime.Connection is { IsOpen: true };
+            bool consumerOpen = runtime.ConsumerChannel is { IsOpen: true };
+            if (connectionOpen && (HasInboundWork(serviceProvider, builder) == false || consumerOpen))
                 return;
 
             CancelPendingRpc(serviceProvider);
@@ -355,8 +418,9 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
 
             try
             {
-                await ValidateRemoteBrokerState(serviceProvider, builder);
-                await StartInfrastructure(serviceProvider, builder);
+                await ValidateRemoteBrokerState(serviceProvider, builder, cancellationToken);
+                await StartInfrastructure(serviceProvider, builder, cancellationToken);
+                await StartConsumers(serviceProvider, builder, cancellationToken);
                 break;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -367,7 +431,7 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
             {
                 logger.LogError(
                     ex,
-                    "RabbitMQ recover failed to start infrastructure; retrying in {DelaySeconds}s",
+                    "RabbitMQ recover failed to start; retrying in {DelaySeconds}s",
                     delaySeconds);
                 try
                 {
@@ -386,12 +450,10 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
                 };
             }
         }
-
-        if (cancellationToken.IsCancellationRequested)
-            return;
-
-        await StartConsumers(serviceProvider, builder);
     }
+
+    private bool HasInboundWork(IServiceProvider services, BrokerOptionsBuilder builder)
+        => services.GetKeyedServices<HandlerWrapper>(BrokerName).Any() || builder.RpcCallers.Count > 0;
 
     private void CancelPendingRpc(IServiceProvider serviceProvider)
     {
@@ -406,60 +468,97 @@ internal sealed class RabbitMQExtension(RabbitMQSettings settings, string broker
         }
     }
 
-    public async Task StartConsumers(IServiceProvider services, BrokerOptionsBuilder builder)
+    public async Task StartConsumers(
+        IServiceProvider services,
+        BrokerOptionsBuilder builder,
+        CancellationToken cancellationToken = default)
     {
+        RabbitMqRuntime runtime = services.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
+        using CancellationTokenSource linked = LinkWithStop(runtime, cancellationToken);
+        CancellationToken token = linked.Token;
+        token.ThrowIfCancellationRequested();
+
         IEnumerable<HandlerWrapper> handlers = services.GetKeyedServices<HandlerWrapper>(BrokerName);
-        if (handlers.Any() == false && builder.RpcCallers.Count == 0)
+        if (HasInboundWork(services, builder) == false)
             return;
 
-        RabbitMqRuntime runtime = services.GetRequiredKeyedService<RabbitMqRuntime>(BrokerName);
         if (runtime.ConsumerChannel is { IsOpen: true })
             return;
 
         IConnection connection = runtime.RequireConnection();
-        IChannel channel = await connection.CreateChannelAsync();
-        runtime.ConsumerChannel = channel;
-
-        await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: settings.PrefetchCount, global: false);
-        INameResolver resolver = services.GetRequiredKeyedService<INameResolver>(BrokerName);
-        var consumer = new RabbitMQBasicConsumer(
-            services,
-            channel,
-            builder.BrokerName,
-            services.GetRequiredService<ILogger<RabbitMQBasicConsumer>>());
-
-        bool replyQueueConsumed = false;
-        foreach (HandlerWrapper handler in handlers)
+        IChannel channel = await connection.CreateChannelAsync(cancellationToken: token);
+        try
         {
-            if (_replyTypes.Contains(handler.MessageType))
+            await channel.BasicQosAsync(prefetchSize: 0, prefetchCount: settings.PrefetchCount, global: false, cancellationToken: token);
+            INameResolver resolver = services.GetRequiredKeyedService<INameResolver>(BrokerName);
+            var consumer = new RabbitMQBasicConsumer(
+                services,
+                channel,
+                builder.BrokerName,
+                services.GetRequiredService<ILogger<RabbitMQBasicConsumer>>());
+
+            bool replyQueueConsumed = false;
+            foreach (HandlerWrapper handler in handlers)
             {
-                if (!replyQueueConsumed)
+                if (_replyTypes.Contains(handler.MessageType))
+                {
+                    if (!replyQueueConsumed)
+                    {
+                        await channel.BasicConsumeAsync(
+                                    queue: ReplyQueueName,
+                                    autoAck: false,
+                                    consumer: consumer,
+                                    token);
+                        replyQueueConsumed = true;
+                    }
+                }
+                else
                 {
                     await channel.BasicConsumeAsync(
-                                queue: ReplyQueueName,
+                                queue: resolver.ResolveInboundName(handler.MessageType),
                                 autoAck: false,
                                 consumer: consumer,
-                                CancellationToken.None);
-                    replyQueueConsumed = true;
+                                token);
                 }
             }
-            else
+
+            if (builder.RpcCallers.Count > 0 && !replyQueueConsumed)
             {
                 await channel.BasicConsumeAsync(
-                            queue: resolver.ResolveInboundName(handler.MessageType),
-                            autoAck: false,
-                            consumer: consumer,
-                            CancellationToken.None);
+                    queue: ReplyQueueName,
+                    autoAck: false,
+                    consumer: consumer,
+                    token);
             }
+
+            runtime.ConsumerChannel = channel;
+        }
+        catch
+        {
+            await CloseChannelQuietly(channel);
+            throw;
+        }
+    }
+
+    private static async Task CloseChannelQuietly(IChannel channel)
+    {
+        try
+        {
+            if (channel.IsOpen)
+                await channel.CloseAsync();
+        }
+        catch
+        {
+            // ignore
         }
 
-        if (builder.RpcCallers.Count > 0 && !replyQueueConsumed)
+        try
         {
-            await channel.BasicConsumeAsync(
-                queue: ReplyQueueName,
-                autoAck: false,
-                consumer: consumer,
-                CancellationToken.None);
+            await channel.DisposeAsync();
+        }
+        catch
+        {
+            // ignore
         }
     }
 }

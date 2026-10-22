@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Moq;
 using OmniBroker.Infrastructure;
 using OmniBroker.Interfaces;
@@ -9,6 +10,7 @@ using OmniBroker.RabbitMQ.Implementations;
 using OmniBroker.RabbitMQ.ServiceSetup;
 using OmniBroker.Tests.Unit.Fixtures;
 using RabbitMQ.Client;
+using RabbitMQ.Client.Exceptions;
 using Shouldly;
 
 namespace OmniBroker.Tests.Unit.RabbitMq;
@@ -208,6 +210,52 @@ public sealed class RabbitMQRpcTests
     }
 
     [Fact]
+    public async Task ReplyDelegate_unroutable_reply_is_acknowledged_once()
+    {
+        var logger = new WarningLogger();
+        (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> del,
+            Mock<IProducer<TestReplyMessage>> producer,
+            string brokerId,
+            ServiceProvider provider) = ReplyPublish(logger);
+        producer.Setup(p => p.Publish(It.IsAny<TestReplyMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new PublishException(1UL, true));
+
+        HandleResult result = await del(
+            provider,
+            new TestMessage { CorrelationId = "corr" },
+            new MessageContext(brokerId, new RabbitMQReplyInfo { ReplyTo = "reply-q" }));
+
+        result.ShouldBe(HandleResult.Ack);
+        logger.Warnings.ShouldBe(1);
+        producer.Verify(p => p.Publish(
+            It.IsAny<TestReplyMessage>(),
+            It.IsAny<PublishOptions?>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task ReplyDelegate_publish_false_returns_retry()
+    {
+        (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> del,
+            Mock<IProducer<TestReplyMessage>> producer,
+            string brokerId,
+            ServiceProvider provider) = ReplyPublish();
+        producer.Setup(p => p.Publish(It.IsAny<TestReplyMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(false);
+
+        HandleResult result = await del(
+            provider,
+            new TestMessage { CorrelationId = "corr" },
+            new MessageContext(brokerId, new RabbitMQReplyInfo { ReplyTo = "reply-q" }));
+
+        result.ShouldBe(HandleResult.Retry);
+        producer.Verify(p => p.Publish(
+            It.IsAny<TestReplyMessage>(),
+            It.IsAny<PublishOptions?>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task Recover_cancels_pending_rpc()
     {
         var brokerId = Guid.NewGuid().ToString();
@@ -246,5 +294,51 @@ public sealed class RabbitMQRpcTests
         pending.IsEmpty.ShouldBeTrue();
         Exception? ex = await Should.ThrowAsync<InvalidOperationException>(async () => await tcs.Task);
         ex!.Message.ShouldContain("recovered");
+    }
+
+    private static (
+        Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>> Delegate,
+        Mock<IProducer<TestReplyMessage>> Producer,
+        string BrokerId,
+        ServiceProvider Provider) ReplyPublish(ILogger<RabbitMQExtension>? logger = null)
+    {
+        MethodInfo method = typeof(RabbitMQExtension)
+            .GetMethod("CreateReplyDelegate", BindingFlags.NonPublic | BindingFlags.Static)!
+            .MakeGenericMethod(typeof(TestReplyMessage));
+        var del = (Func<IServiceProvider, IMessage, MessageContext, Task<HandleResult>>)method.Invoke(
+            null,
+            [(Delegate)(Func<TestMessage, Task<TestReplyMessage>>)(_ => Task.FromResult(new TestReplyMessage { Body = [1] }))])!;
+
+        var brokerId = Guid.NewGuid().ToString();
+        var builder = new BrokerOptionsBuilder { BrokerName = brokerId };
+        builder.UseRabbitMq(Settings());
+        var producer = new Mock<IProducer<TestReplyMessage>>();
+
+        var services = new ServiceCollection();
+        if (logger is not null)
+            services.AddSingleton(logger);
+        services.AddKeyedSingleton<IProducer<TestReplyMessage>>(brokerId, producer.Object);
+        services.AddKeyedSingleton(brokerId, builder);
+        return (del, producer, brokerId, services.BuildServiceProvider());
+    }
+
+    private sealed class WarningLogger : ILogger<RabbitMQExtension>
+    {
+        public int Warnings { get; private set; }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+                Warnings++;
+        }
     }
 }

@@ -1,4 +1,5 @@
 using RabbitMQ.Client;
+using RabbitMQ.Client.Events;
 
 namespace OmniBroker.RabbitMQ.ServiceSetup;
 
@@ -7,6 +8,12 @@ internal sealed class RabbitMqRuntime
     private readonly CancellationTokenSource _stopping = new();
 
     public IConnection? Connection { get; set; }
+
+    /// <summary>
+    /// Handler subscribed to <see cref="IConnection.ConnectionShutdownAsync"/>.
+    /// Cleared before an intentional close so that close does not start another recover.
+    /// </summary>
+    internal AsyncEventHandler<ShutdownEventArgs>? ConnectionShutdown { get; set; }
     public ConcurrentObjectPool<IChannel>? ChannelPool { get; set; }
     public IChannel? ConsumerChannel { get; set; }
     public SemaphoreSlim ReconnectLock { get; } = new(1, 1);
@@ -22,7 +29,7 @@ internal sealed class RabbitMqRuntime
     public void SignalStop() => _stopping.Cancel();
 
     /// <summary>
-    /// When true, consumer channel shutdown callbacks must not trigger recover
+    /// When true, connection and consumer channel shutdown callbacks must not trigger recover
     /// (intentional close during reset).
     /// </summary>
     public bool SuppressConsumerShutdownRecover { get; set; }
@@ -57,6 +64,12 @@ internal sealed class RabbitMqRuntime
     internal async Task ResetConnectionCoreAsync()
     {
         SuppressConsumerShutdownRecover = true;
+
+        if (Connection is not null && ConnectionShutdown is not null)
+        {
+            Connection.ConnectionShutdownAsync -= ConnectionShutdown;
+            ConnectionShutdown = null;
+        }
 
         if (ConsumerChannel is not null)
         {

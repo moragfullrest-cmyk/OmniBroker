@@ -181,4 +181,67 @@ public sealed class MultiBrokerProducerTests
             It.Is<PublishOptions?>(o => o != null && o.Destination == "custom-dest"),
             It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task Publish_producer_exception_records_outcome_and_continues()
+    {
+        var failure = new InvalidOperationException("broker down");
+        var first = new Mock<IProducer<TestMessage>>();
+        first.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var second = new Mock<IProducer<TestMessage>>();
+        second.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(failure);
+        var third = new Mock<IProducer<TestMessage>>();
+        third.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        (MultiBrokerProducer<TestMessage> sut, string[] brokerIds) = CreateWithIds(first.Object, second.Object, third.Object);
+
+        MultiBrokerPublishException ex = await Should.ThrowAsync<MultiBrokerPublishException>(() => sut.Publish(new TestMessage()));
+
+        ex.Outcomes.Count.ShouldBe(3);
+        ex.Outcomes[0].ShouldBe(new BrokerPublishOutcome(brokerIds[0], first.Object.GetType().Name, true));
+        ex.Outcomes[1].Succeeded.ShouldBeFalse();
+        ex.Outcomes[1].Error.ShouldBeSameAs(failure);
+        ex.Outcomes[2].ShouldBe(new BrokerPublishOutcome(brokerIds[2], third.Object.GetType().Name, true));
+        third.Verify(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Publish_cancellation_before_any_success_rethrows()
+    {
+        var canceled = new OperationCanceledException();
+        var first = new Mock<IProducer<TestMessage>>();
+        first.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(canceled);
+        var second = new Mock<IProducer<TestMessage>>();
+        MultiBrokerProducer<TestMessage> sut = Create(first.Object, second.Object);
+
+        await Should.ThrowAsync<OperationCanceledException>(() => sut.Publish(new TestMessage()));
+
+        second.Verify(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Publish_cancellation_after_success_throws_with_inner_exception()
+    {
+        var canceled = new OperationCanceledException();
+        var first = new Mock<IProducer<TestMessage>>();
+        first.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+        var second = new Mock<IProducer<TestMessage>>();
+        second.Setup(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(canceled);
+        var third = new Mock<IProducer<TestMessage>>();
+        (MultiBrokerProducer<TestMessage> sut, string[] brokerIds) = CreateWithIds(first.Object, second.Object, third.Object);
+
+        MultiBrokerPublishException ex = await Should.ThrowAsync<MultiBrokerPublishException>(() => sut.Publish(new TestMessage()));
+
+        ex.InnerException.ShouldBeSameAs(canceled);
+        ex.Outcomes.Count.ShouldBe(2);
+        ex.Outcomes[0].ShouldBe(new BrokerPublishOutcome(brokerIds[0], first.Object.GetType().Name, true));
+        ex.Outcomes[1].Succeeded.ShouldBeFalse();
+        ex.Outcomes[1].Error.ShouldBeSameAs(canceled);
+        third.Verify(p => p.Publish(It.IsAny<TestMessage>(), It.IsAny<PublishOptions?>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
 }

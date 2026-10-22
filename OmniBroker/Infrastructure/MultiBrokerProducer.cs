@@ -8,7 +8,9 @@ namespace OmniBroker.Infrastructure;
 /// Publishes to every broker registered for <typeparamref name="TMessage"/>.
 /// Returns <see langword="true"/> only when every producer accepts the message.
 /// Throws <see cref="InvalidOperationException"/> when none are registered.
-/// Throws <see cref="MultiBrokerPublishException"/> when more than one producer is registered and any publish fails.
+/// Throws <see cref="MultiBrokerPublishException"/> when more than one producer is registered and any publish fails or throws.
+/// A producer exception is recorded and the remaining brokers are still called.
+/// <see cref="OperationCanceledException"/> stops the loop: it is rethrown when nobody has accepted the message, and wrapped as <see cref="Exception.InnerException"/> when somebody already has.
 /// Earlier brokers may already have accepted the message; see <see cref="MultiBrokerPublishException.Outcomes"/>.
 /// </summary>
 public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TMessage : IMessage
@@ -53,8 +55,29 @@ public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TM
         bool anyFailed = false;
         foreach ((string brokerId, IProducer<TMessage> producer) in _producers)
         {
-            bool published = await producer.Publish(message, options, cancellationToken);
-            outcomes.Add(new BrokerPublishOutcome(brokerId, producer.GetType().Name, published));
+            string producerType = producer.GetType().Name;
+            bool published;
+            try
+            {
+                published = await producer.Publish(message, options, cancellationToken);
+            }
+            catch (OperationCanceledException ex)
+            {
+                outcomes.Add(new BrokerPublishOutcome(brokerId, producerType, false) { Error = ex });
+                if (outcomes.Any(outcome => outcome.Succeeded))
+                    throw new MultiBrokerPublishException(typeof(TMessage), outcomes, ex);
+
+                throw;
+            }
+            catch (Exception ex)
+            {
+                outcomes.Add(new BrokerPublishOutcome(brokerId, producerType, false) { Error = ex });
+                anyFailed = true;
+                LogFailure(brokerId, producer, ex);
+                continue;
+            }
+
+            outcomes.Add(new BrokerPublishOutcome(brokerId, producerType, published));
             if (!published)
             {
                 anyFailed = true;
@@ -68,9 +91,10 @@ public sealed class MultiBrokerProducer<TMessage> : IProducer<TMessage> where TM
         return true;
     }
 
-    private void LogFailure(string brokerId, IProducer<TMessage> producer)
+    private void LogFailure(string brokerId, IProducer<TMessage> producer, Exception? error = null)
     {
         _logger.LogWarning(
+            error,
             "Producer {ProducerType} on broker {BrokerName} failed to publish {MessageType}",
             producer.GetType().Name,
             brokerId,

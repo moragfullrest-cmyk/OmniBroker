@@ -7,105 +7,127 @@ public sealed class ConcurrentObjectPool<T> : IAsyncDisposable
 {
     private readonly ConcurrentBag<T> _objects = [];
     private readonly Func<CancellationToken, Task<T>> _objectGenerator;
-    private readonly int _maxSize;
-    private readonly SemaphoreSlim _signal = new(0);
-    private int _created;
+    private readonly SemaphoreSlim _slots;
+    private readonly object _gate = new();
     private int _disposed;
 
     public ConcurrentObjectPool(Func<CancellationToken, Task<T>> objectGenerator, int maxSize = 32)
     {
         _objectGenerator = objectGenerator ?? throw new ArgumentNullException(nameof(objectGenerator));
         if (maxSize < 1) throw new ArgumentOutOfRangeException(nameof(maxSize));
-        _maxSize = maxSize;
+        _slots = new SemaphoreSlim(maxSize, maxSize);
     }
 
     public async Task<T> GetAsync(CancellationToken cancellationToken = default)
     {
-        while (true)
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+        await _slots.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-
-            if (_objects.TryTake(out T? item))
-                return item;
-
-            int created = Volatile.Read(ref _created);
-            if (created < _maxSize)
+            lock (_gate)
             {
-                if (Interlocked.CompareExchange(ref _created, created + 1, created) == created)
-                {
-                    try
-                    {
-                        return (await _objectGenerator(cancellationToken).ConfigureAwait(false))!;
-                    }
-                    catch
-                    {
-                        Interlocked.Decrement(ref _created);
-                        if (Volatile.Read(ref _disposed) == 0)
-                            _signal.Release();
-                        throw;
-                    }
-                }
-
-                continue;
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+                if (_objects.TryTake(out T? item))
+                    return item;
             }
 
-            await _signal.WaitAsync(cancellationToken).ConfigureAwait(false);
+            T created = (await _objectGenerator(cancellationToken).ConfigureAwait(false))!;
+            lock (_gate)
+            {
+                if (Volatile.Read(ref _disposed) == 0)
+                    return created;
+            }
+
+            await DisposeItemAsync(created).ConfigureAwait(false);
+            throw new ObjectDisposedException(GetType().FullName);
+        }
+        catch
+        {
+            ReleaseSlot();
+            throw;
         }
     }
 
     public void Return(T item)
     {
         ArgumentNullException.ThrowIfNull(item);
-        if (Volatile.Read(ref _disposed) != 0)
+        lock (_gate)
         {
-            DisposeItem(item);
-            return;
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                DisposeItem(item);
+                return;
+            }
+
+            _objects.Add(item);
         }
 
-        _objects.Add(item);
-        _signal.Release();
+        ReleaseSlot();
     }
 
     /// <summary>
-    /// Drop a broken item and free a pool slot so a new one can be created.
+    /// Drop a broken item and free the slot it held so a new one can be created.
     /// </summary>
     public async ValueTask DiscardAsync(T item)
     {
         ArgumentNullException.ThrowIfNull(item);
         await DisposeItemAsync(item).ConfigureAwait(false);
-        Interlocked.Decrement(ref _created);
-        if (Volatile.Read(ref _disposed) == 0)
-            _signal.Release();
+        ReleaseSlot();
     }
 
     /// <summary>
     /// Dispose idle items currently in the bag without disposing the pool.
     /// In-flight items are left to the caller (<see cref="Return"/> or <see cref="DiscardAsync"/>).
-    /// Frees a slot for each drained item so a new one can be created; does not reset
-    /// the created count (checked-out items still occupy slots).
+    /// Those idle items already released their slots on <see cref="Return"/>, so this method does not release slots.
     /// </summary>
     public async ValueTask ClearAsync()
     {
-        int drained = 0;
-        while (_objects.TryTake(out T? item))
+        while (true)
         {
-            await DisposeItemAsync(item).ConfigureAwait(false);
-            drained++;
-        }
+            T? item;
+            lock (_gate)
+            {
+                if (!_objects.TryTake(out item))
+                    return;
+            }
 
-        if (drained > 0)
-            Interlocked.Add(ref _created, -drained);
+            await DisposeItemAsync(item).ConfigureAwait(false);
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
+        List<T> idle;
+        lock (_gate)
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
 
-        while (_objects.TryTake(out T? item))
+            idle = [];
+            while (_objects.TryTake(out T? item))
+                idle.Add(item);
+        }
+
+        foreach (T item in idle)
             await DisposeItemAsync(item).ConfigureAwait(false);
 
-        _signal.Dispose();
+        _slots.Dispose();
+    }
+
+    private void ReleaseSlot()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+            return;
+
+        try
+        {
+            _slots.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+            // DisposeAsync won the race after the disposed flag was observed as clear.
+        }
     }
 
     private static void DisposeItem(T item)
